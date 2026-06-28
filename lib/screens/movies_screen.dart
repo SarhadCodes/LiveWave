@@ -9,7 +9,6 @@ import '../widgets/loading_indicator.dart';
 import '../widgets/media_card.dart';
 import '../widgets/media_row.dart';
 import 'movie_detail_screen.dart';
-import 'package:cached_network_image/cached_network_image.dart';
 import '../models/movie.dart';
 
 import '../providers/settings_provider.dart';

@@ -18,6 +18,7 @@ import 'services/download_service.dart';
 import 'utils/platform_detector.dart';
 
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'firebase_options.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'l10n/app_localizations.dart';
 import 'dart:io';
@@ -26,7 +27,9 @@ import 'dart:io';
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   // If you're going to use other Firebase services in the background, such as Firestore,
   // make sure you call `Firebase.initializeApp()` before using other Firebase services.
-  await Firebase.initializeApp();
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
   debugPrint("Handling a background message: ${message.messageId}");
 }
 
@@ -37,7 +40,9 @@ void main() async {
   // Initialize Firebase with a timeout to prevent hanging on Desktop if config is missing
   try {
     debugPrint('Initializing Firebase...');
-    await Firebase.initializeApp().timeout(const Duration(seconds: 5));
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    ).timeout(const Duration(seconds: 5));
     debugPrint('Firebase initialized.');
     
     // Set the background messaging handler early on, as a named top-level function

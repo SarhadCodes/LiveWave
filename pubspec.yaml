@@ -54,7 +54,6 @@ dependencies:
   cached_network_image: ^3.4.1
   
   # Utilities
-  flutter_svg: ^2.0.10+1
   package_info_plus: ^8.1.2
   device_info_plus: ^11.2.0
   intl: ^0.20.2
@@ -66,7 +65,6 @@ dependencies:
   wakelock_plus: ^1.2.11
   liquid_pull_to_refresh: ^3.0.1
   path_provider: ^2.1.0
-  permission_handler: ^11.3.1
   open_filex: ^4.5.0
   firebase_auth: ^5.7.0
   

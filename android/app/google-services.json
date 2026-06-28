@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "638695435234",
+    "project_id": "live-tv-app-a884b",
+    "storage_bucket": "live-tv-app-a884b.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:638695435234:android:3b5ec6f9919124f386a7bb",
+        "android_client_info": {
+          "package_name": "com.livewave.kurdlogs.live_wave"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA32g412sEvnUo8WTG5ctV5lU5puzxYVCg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

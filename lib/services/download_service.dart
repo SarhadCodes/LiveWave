@@ -5,7 +5,6 @@ import 'package:dio/dio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
-import 'package:background_downloader/background_downloader.dart';
 import '../services/firestore_service.dart';
 import '../services/subtitle_service.dart';
 
@@ -100,64 +99,7 @@ class DownloadService extends ChangeNotifier {
   static final DownloadService _instance = DownloadService._internal();
   factory DownloadService() => _instance;
   DownloadService._internal() {
-    _initDownloader();
     _loadDownloads();
-  }
-
-  void _initDownloader() {
-    FileDownloader().configureNotification(
-      running: const TaskNotification('Downloading {displayName}', 'Progress: {progress}'),
-      complete: const TaskNotification('Download Complete', '{displayName} is ready to watch offline.'),
-      error: const TaskNotification('Download Failed', 'Failed to download {displayName}.'),
-      progressBar: true,
-    );
-
-    FileDownloader().updates.listen((update) {
-      if (update is TaskProgressUpdate) {
-        final id = update.task.taskId;
-        if (_downloads.containsKey(id)) {
-          double p = update.progress;
-          if (p < 0) p = 0.0;
-          
-          int total = update.expectedFileSize;
-          int received = _downloads[id]!.receivedBytes;
-          
-          if (update.hasExpectedFileSize && total > 0) {
-            received = (total * p).toInt();
-          } else {
-             // Fallback for servers without Content-Length
-             total = 450 * 1024 * 1024;
-             received = (total * p).toInt();
-          }
-          
-          if (p >= 1.0) p = 0.99; // 1.0 set by status update
-          
-          _downloads[id] = _downloads[id]!.copyWith(
-            progress: p,
-            receivedBytes: received,
-            totalBytes: total,
-          );
-          notifyListeners();
-        }
-      } else if (update is TaskStatusUpdate) {
-        final id = update.task.taskId;
-        if (_downloads.containsKey(id)) {
-          if (update.status == TaskStatus.complete) {
-            _downloads[id] = _downloads[id]!.copyWith(status: DownloadStatus.completed, progress: 1.0);
-            _saveDownloads();
-          } else if (update.status == TaskStatus.failed || update.status == TaskStatus.canceled || update.status == TaskStatus.notFound) {
-            String errorMsg = 'Download failed';
-            if (update.exception != null) {
-              errorMsg = update.exception!.description;
-              debugPrint('Download failed with exception: ${update.exception!.description}');
-            }
-            _downloads[id] = _downloads[id]!.copyWith(status: DownloadStatus.failed, error: errorMsg);
-            _saveDownloads();
-          }
-          notifyListeners();
-        }
-      }
-    });
   }
 
   Map<String, DownloadItem> _downloads = {};
@@ -179,9 +121,8 @@ class DownloadService extends ChangeNotifier {
           for (var item in decoded)
             item['id']: DownloadItem.fromJson(item)
         };
-        // We do not reset downloading state to failed, because background_downloader might still be running!
-        // We will sync state by fetching active tasks.
-        _syncActiveTasks();
+        // Foreground downloads cannot resume after app restart.
+        await _syncActiveTasks();
         notifyListeners();
       } catch (e) {
         debugPrint('Error loading downloads: $e');
@@ -190,16 +131,18 @@ class DownloadService extends ChangeNotifier {
   }
 
   Future<void> _syncActiveTasks() async {
-    final tasks = await FileDownloader().database.allRecords();
-    for (var record in tasks) {
-      if (record.status == TaskStatus.running && _downloads.containsKey(record.taskId)) {
-        // Task is running
-        _downloads[record.taskId] = _downloads[record.taskId]!.copyWith(status: DownloadStatus.downloading);
-      } else if ((record.status == TaskStatus.failed || record.status == TaskStatus.canceled) && _downloads.containsKey(record.taskId)) {
-        if (_downloads[record.taskId]!.status == DownloadStatus.downloading) {
-          _downloads[record.taskId] = _downloads[record.taskId]!.copyWith(status: DownloadStatus.failed, error: 'Interrupted');
-        }
+    var changed = false;
+    for (final entry in _downloads.entries.toList()) {
+      if (entry.value.status == DownloadStatus.downloading) {
+        _downloads[entry.key] = entry.value.copyWith(
+          status: DownloadStatus.failed,
+          error: 'Download interrupted — please retry',
+        );
+        changed = true;
       }
+    }
+    if (changed) {
+      await _saveDownloads();
     }
     notifyListeners();
   }
@@ -346,23 +289,36 @@ class DownloadService extends ChangeNotifier {
       _downloads[id] = _downloads[id]!.copyWith(progress: 0.01);
       notifyListeners();
 
-      // Download Video (Background)
-      final task = DownloadTask(
-        taskId: id,
-        url: videoUrl,
-        filename: '$id.mp4',
-        displayName: title,
-        baseDirectory: BaseDirectory.applicationDocuments,
-        directory: 'downloads',
-        updates: Updates.statusAndProgress,
-        retries: 3,
+      // Download video (foreground)
+      await _dio.download(
+        videoUrl,
+        videoFile.path,
+        cancelToken: _cancelTokens[id],
+        onReceiveProgress: (received, total) {
+          if (!_downloads.containsKey(id)) return;
+          final estimatedTotal = total > 0 ? total : 450 * 1024 * 1024;
+          final progress = total > 0
+              ? (received / total).clamp(0.0, 0.99)
+              : 0.01;
+          _downloads[id] = _downloads[id]!.copyWith(
+            progress: progress,
+            receivedBytes: received,
+            totalBytes: estimatedTotal,
+          );
+          notifyListeners();
+        },
       );
 
-      await FileDownloader().enqueue(task);
-      // Status will update via FileDownloader().updates.listen
+      _downloads[id] = _downloads[id]!.copyWith(
+        status: DownloadStatus.completed,
+        progress: 1.0,
+      );
       await _saveDownloads();
-      
+      notifyListeners();
     } catch (e) {
+      if (e is DioException && CancelToken.isCancel(e)) {
+        return;
+      }
       _downloads[id] = _downloads[id]!.copyWith(
         status: DownloadStatus.failed,
         error: e.toString(),
@@ -372,7 +328,8 @@ class DownloadService extends ChangeNotifier {
   }
 
   Future<void> cancelDownload(String id) async {
-    await FileDownloader().cancelTaskWithId(id);
+    _cancelTokens[id]?.cancel('Cancelled by user');
+    _cancelTokens.remove(id);
     if (_downloads.containsKey(id)) {
       _downloads[id] = _downloads[id]!.copyWith(status: DownloadStatus.failed, error: 'Cancelled by user');
       notifyListeners();

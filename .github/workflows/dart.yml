@@ -2,41 +2,70 @@ name: iOS-ipa-build
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag for IPA upload'
+        required: false
+        default: 'v1.0.1'
 
 jobs:
   build-ios:
-    name: 🎉 iOS Build
+    name: iOS Build
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: subosito/flutter-action@v2
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
         with:
-          channel: 'stable'
-          architecture: x64
-      - run: flutter pub get
-      
+          channel: stable
+          cache: true
 
-      - run: pod repo update
+      - name: Flutter version
+        run: flutter --version
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze (lib only)
+        run: flutter analyze lib
+
+      - name: Precache iOS artifacts
+        run: flutter precache --ios
+
+      - name: Install CocoaPods
+        run: |
+          sudo gem install cocoapods --no-document || true
+          pod --version
+
+      - name: Pod install
         working-directory: ios
+        run: pod install --repo-update
 
-      - run: flutter build ios --release --no-codesign
+      - name: Build iOS release (no codesign)
+        run: flutter build ios --release --no-codesign
 
-      - run: mkdir Payload
+      - name: Package IPA
         working-directory: build/ios/iphoneos
+        run: |
+          mkdir -p Payload
+          mv Runner.app Payload/
+          zip -qq -r -9 FlutterIpaExport.ipa Payload
 
-      - run: mv Runner.app/ Payload
-        working-directory: build/ios/iphoneos
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-release-ipa
+          path: build/ios/iphoneos/FlutterIpaExport.ipa
+          if-no-files-found: error
 
-      - name: Zip output
-        run: zip -qq -r -9 FlutterIpaExport.ipa Payload
-        working-directory: build/ios/iphoneos
-
-      - name: Upload binaries to release
+      - name: Upload to GitHub Release
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: build/ios/iphoneos/FlutterIpaExport.ipa
-          tag: v1.0
+          tag: ${{ github.event.inputs.release_tag }}
           overwrite: true
-          body: "This is first release"
+          body: Live Wave iOS release build (unsigned IPA)

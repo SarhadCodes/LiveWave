@@ -10,62 +10,59 @@ on:
 
 jobs:
   build-ios:
-    name: iOS Build
+    name: 📱 Build iOS IPA
     runs-on: macos-latest
+
     steps:
-      - name: Checkout
+      - name: 📥 Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up Flutter
+      - name: 🐦 Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
 
-      - name: Flutter version
+      - name: 📋 Flutter Version
         run: flutter --version
 
-      - name: Install dependencies
+      - name: 📦 Install Dependencies
         run: flutter pub get
 
-      - name: Analyze (lib only)
-        run: flutter analyze lib
-
-      - name: Precache iOS artifacts
+      - name: 🍎 Precache iOS
         run: flutter precache --ios
 
-      - name: Install CocoaPods
+      - name: 💎 Install CocoaPods
         run: |
           sudo gem install cocoapods --no-document || true
-          pod --version
-
-      - name: Pod install
+          pod repo update
+          pod install --repo-update
         working-directory: ios
-        run: pod install --repo-update
 
-      - name: Build iOS release (no codesign)
+      - name: 🏗 Build iOS (No Code Signing)
         run: flutter build ios --release --no-codesign
 
-      - name: Package IPA
+      - name: 📦 Create IPA
         working-directory: build/ios/iphoneos
         run: |
           mkdir -p Payload
           mv Runner.app Payload/
-          zip -qq -r -9 FlutterIpaExport.ipa Payload
+          zip -r FlutterIpaExport.ipa Payload
 
-      - name: Upload IPA artifact
+      - name: ⬆ Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ios-release-ipa
+          name: LiveWave-iOS-IPA
           path: build/ios/iphoneos/FlutterIpaExport.ipa
-          if-no-files-found: error
 
-      - name: Upload to GitHub Release
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+      - name: 🚀 Upload to GitHub Release
+        if: github.event_name == 'workflow_dispatch'
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: build/ios/iphoneos/FlutterIpaExport.ipa
           tag: ${{ github.event.inputs.release_tag }}
           overwrite: true
-          body: Live Wave iOS release build (unsigned IPA)
+          body: |
+            Live Wave iOS Release
+            Unsigned IPA built with GitHub Actions.

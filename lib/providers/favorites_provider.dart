@@ -87,4 +87,18 @@ class FavoritesProvider extends ChangeNotifier {
       debugPrint('Error saving tv show favorites: $e');
     }
   }
+
+  /// Remove all movie and TV show favorites (e.g. when activation expires).
+  Future<void> clearAllFavorites() async {
+    _favoriteMovies.clear();
+    _favoriteTvShows.clear();
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_favMoviesKey);
+      await prefs.remove(_favTvShowsKey);
+    } catch (e) {
+      debugPrint('Error clearing media favorites: $e');
+    }
+  }
 }

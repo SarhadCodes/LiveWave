@@ -9,6 +9,8 @@ import '../providers/channels_provider.dart';
 import '../providers/movies_provider.dart';
 import '../providers/settings_provider.dart';
 import '../providers/tv_shows_provider.dart';
+import '../providers/favorites_provider.dart';
+import '../services/user_content_cleanup.dart';
 
 class AccountScreen extends StatefulWidget {
   const AccountScreen({super.key});
@@ -48,104 +50,130 @@ class _AccountScreenState extends State<AccountScreen> {
   @override
   Widget build(BuildContext context) {
     final settings = Provider.of<SettingsProvider>(context, listen: false);
+    final activation = Provider.of<ActivationProvider>(context);
+    final isTv = settings.layoutMode != 'mobile';
+    final showRefresh = activation.isPending || activation.isExpired;
     final dateFmt = DateFormat('MMM d, yyyy • HH:mm');
 
-    return Scaffold(
-      backgroundColor: AppTheme.backgroundColor,
-      appBar: AppBar(
-        backgroundColor: Colors.black,
-        title: const Text(
-          'ACCOUNT',
-          style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 2),
-        ),
-      ),
-      body: Consumer<ActivationProvider>(
-        builder: (context, activation, _) {
-          final status = _statusLabel(activation);
-          final statusColor = _statusColor(activation);
-          final expires = activation.expiresAt;
-          final isRealMac = RegExp(r'^([0-9A-F]{2}:){5}[0-9A-F]{2}$')
-              .hasMatch(activation.macAddress);
-
-          return ListView(
-            padding: const EdgeInsets.all(20),
-            children: [
-              _StatusCard(
-                status: status,
-                color: statusColor,
-                subtitle: activation.isActive
-                    ? 'Your IPTV subscription is active'
-                    : activation.isExpired
-                        ? 'Subscription ended — default channels are shown'
-                        : 'Waiting for admin to activate this device',
-              ),
-              const SizedBox(height: 16),
-              _InfoTile(
-                icon: Icons.fingerprint_rounded,
-                label: isRealMac ? 'MAC Address' : 'Device ID',
-                value: activation.isMacLoading
-                    ? 'Loading...'
-                    : (activation.macAddress.isNotEmpty
-                        ? activation.macAddress
-                        : 'Unavailable'),
-                onCopy: activation.macAddress.isNotEmpty
-                    ? () {
-                        Clipboard.setData(
-                          ClipboardData(text: activation.macAddress),
-                        );
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Copied to clipboard')),
-                        );
-                      }
-                    : null,
-              ),
-              if (!isRealMac && activation.macAddress.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8, left: 4, right: 4),
-                  child: Text(
-                    'This device hides its hardware MAC. Send this Device ID to your admin instead.',
-                    style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 12),
+    return PopScope(
+      canPop: true,
+      child: Scaffold(
+        backgroundColor: AppTheme.backgroundColor,
+        appBar: AppBar(
+          backgroundColor: Colors.black,
+          title: const Text(
+            'ACCOUNT',
+            style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 2),
+          ),
+          leading: Focus(
+            autofocus: isTv && !showRefresh,
+            onKeyEvent: (node, event) {
+              if (event is KeyDownEvent &&
+                  (event.logicalKey == LogicalKeyboardKey.enter ||
+                      event.logicalKey == LogicalKeyboardKey.select ||
+                      event.logicalKey == LogicalKeyboardKey.escape ||
+                      event.logicalKey == LogicalKeyboardKey.goBack)) {
+                Navigator.maybePop(context);
+                return KeyEventResult.handled;
+              }
+              return KeyEventResult.ignored;
+            },
+            child: Builder(
+              builder: (context) {
+                final focused = Focus.of(context).hasFocus;
+                return IconButton(
+                  onPressed: () => Navigator.maybePop(context),
+                  icon: Icon(
+                    Icons.arrow_back_rounded,
+                    color: focused ? AppTheme.primaryColor : Colors.white,
                   ),
+                  style: IconButton.styleFrom(
+                    backgroundColor: focused ? Colors.white.withOpacity(0.12) : null,
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+        body: Consumer<ActivationProvider>(
+          builder: (context, activation, _) {
+            final status = _statusLabel(activation);
+            final statusColor = _statusColor(activation);
+            final expires = activation.expiresAt;
+            final isRealMac = RegExp(r'^([0-9A-F]{2}:){5}[0-9A-F]{2}$')
+                .hasMatch(activation.macAddress);
+
+            return ListView(
+              padding: const EdgeInsets.all(20),
+              children: [
+                _StatusCard(
+                  status: status,
+                  color: statusColor,
+                  subtitle: activation.isActive
+                      ? 'Your IPTV subscription is active'
+                      : activation.isExpired
+                          ? 'Subscription ended — default channels are shown'
+                          : 'Waiting for admin to activate this device',
                 ),
-              const SizedBox(height: 12),
-              _InfoTile(
-                icon: Icons.event_rounded,
-                label: 'Expires',
-                value: expires != null ? dateFmt.format(expires) : '—',
-              ),
-              const SizedBox(height: 12),
-              _InfoTile(
-                icon: Icons.calendar_month_rounded,
-                label: 'Plan',
-                value: activation.planLabel ?? '—',
-              ),
-              const SizedBox(height: 28),
-              if (activation.isPending || activation.isExpired)
-                SizedBox(
-                  height: 48,
-                  child: ElevatedButton.icon(
-                    onPressed: () => _refreshActivation(context, settings, activation),
-                    icon: const Icon(Icons.refresh_rounded),
-                    label: const Text('REFRESH STATUS'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppTheme.primaryColor,
-                      foregroundColor: Colors.black,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
+                const SizedBox(height: 16),
+                _InfoTile(
+                  icon: Icons.fingerprint_rounded,
+                  label: isRealMac ? 'MAC Address' : 'Device ID',
+                  value: activation.isMacLoading
+                      ? 'Loading...'
+                      : (activation.macAddress.isNotEmpty
+                          ? activation.macAddress
+                          : 'Unavailable'),
+                  onCopy: activation.macAddress.isNotEmpty
+                      ? () {
+                          Clipboard.setData(
+                            ClipboardData(text: activation.macAddress),
+                          );
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Copied to clipboard')),
+                          );
+                        }
+                      : null,
+                ),
+                if (!isRealMac && activation.macAddress.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8, left: 4, right: 4),
+                    child: Text(
+                      'This device hides its hardware MAC. Send this Device ID to your admin instead.',
+                      style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 12),
                     ),
                   ),
+                const SizedBox(height: 12),
+                _InfoTile(
+                  icon: Icons.event_rounded,
+                  label: 'Expires',
+                  value: expires != null ? dateFmt.format(expires) : '—',
                 ),
-              if (activation.message != null && activation.message!.isNotEmpty) ...[
-                const SizedBox(height: 20),
-                Text(
-                  activation.message!,
-                  style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 12),
+                const SizedBox(height: 12),
+                _InfoTile(
+                  icon: Icons.calendar_month_rounded,
+                  label: 'Plan',
+                  value: activation.planLabel ?? '—',
                 ),
+                const SizedBox(height: 28),
+                if (showRefresh)
+                  _TvFocusButton(
+                    autofocus: isTv,
+                    icon: Icons.refresh_rounded,
+                    label: 'REFRESH STATUS',
+                    onPressed: () => _refreshActivation(context, settings, activation),
+                  ),
+                if (activation.message != null && activation.message!.isNotEmpty) ...[
+                  const SizedBox(height: 20),
+                  Text(
+                    activation.message!,
+                    style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 12),
+                  ),
+                ],
               ],
-            ],
-          );
-        },
+            );
+          },
+        ),
       ),
     );
   }
@@ -155,16 +183,34 @@ class _AccountScreenState extends State<AccountScreen> {
     SettingsProvider settings,
     ActivationProvider activation,
   ) async {
+    final previous = activation.status;
     await activation.recheck(settings);
     if (!context.mounted) return;
 
     final channels = Provider.of<ChannelsProvider>(context, listen: false);
+    final favorites = Provider.of<FavoritesProvider>(context, listen: false);
+    await UserContentCleanup.onActivationStatusChange(
+      previous: previous,
+      current: activation.status,
+      channels: channels,
+      favorites: favorites,
+    );
+
     final movies = Provider.of<MoviesProvider>(context, listen: false);
     final tvShows = Provider.of<TvShowsProvider>(context, listen: false);
+
+    // Keep the full catalog visible regardless of activation.
+    channels.setPreviewLimited(false);
+    movies.setPreviewLimited(false);
+    tvShows.setPreviewLimited(false);
+
     channels.setContentSource(settings.contentSource);
     movies.setContentSource(settings.contentSource);
     tvShows.setContentSource(settings.contentSource);
-    await channels.fetchChannels();
+    // Reset VOD providers so they refetch with the new cap state on next open.
+    movies.reset();
+    tvShows.reset();
+    await channels.fetchChannels(force: true);
 
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -180,6 +226,67 @@ class _AccountScreenState extends State<AccountScreen> {
         ),
       );
     }
+  }
+}
+
+class _TvFocusButton extends StatelessWidget {
+  final bool autofocus;
+  final IconData icon;
+  final String label;
+  final VoidCallback onPressed;
+
+  const _TvFocusButton({
+    this.autofocus = false,
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Focus(
+      autofocus: autofocus,
+      onKeyEvent: (node, event) {
+        if (event is KeyDownEvent &&
+            (event.logicalKey == LogicalKeyboardKey.enter ||
+                event.logicalKey == LogicalKeyboardKey.select)) {
+          onPressed();
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: Builder(
+        builder: (context) {
+          final isFocused = Focus.of(context).hasFocus;
+          return SizedBox(
+            height: 48,
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: onPressed,
+              icon: Icon(icon, color: isFocused ? Colors.black : Colors.black87),
+              label: Text(
+                label,
+                style: TextStyle(
+                  color: isFocused ? Colors.black : Colors.black87,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: isFocused ? Colors.white : AppTheme.primaryColor,
+                foregroundColor: Colors.black,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: isFocused
+                      ? const BorderSide(color: Colors.white, width: 2)
+                      : BorderSide.none,
+                ),
+                elevation: isFocused ? 4 : 0,
+              ),
+            ),
+          );
+        },
+      ),
+    );
   }
 }
 
@@ -287,10 +394,44 @@ class _InfoTile extends StatelessWidget {
             ),
           ),
           if (onCopy != null)
-            IconButton(
-              onPressed: onCopy,
-              icon: const Icon(Icons.copy_rounded, color: Colors.white54, size: 20),
-              tooltip: 'Copy',
+            Focus(
+              onKeyEvent: (node, event) {
+                if (event is KeyDownEvent &&
+                    (event.logicalKey == LogicalKeyboardKey.enter ||
+                        event.logicalKey == LogicalKeyboardKey.select)) {
+                  onCopy!();
+                  return KeyEventResult.handled;
+                }
+                return KeyEventResult.ignored;
+              },
+              child: Builder(
+                builder: (context) {
+                  final isFocused = Focus.of(context).hasFocus;
+                  return Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: onCopy,
+                      borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: isFocused ? Colors.white : Colors.white.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: isFocused ? Colors.white : Colors.transparent,
+                            width: 2,
+                          ),
+                        ),
+                        child: Icon(
+                          Icons.copy_rounded,
+                          color: isFocused ? Colors.black : Colors.white54,
+                          size: 20,
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
             ),
         ],
       ),

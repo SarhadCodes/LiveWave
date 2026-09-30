@@ -10,8 +10,12 @@ import 'media_custom_player_screen.dart';
 import 'package:provider/provider.dart';
 import '../providers/settings_provider.dart';
 import '../providers/favorites_provider.dart';
+import '../providers/watch_history_provider.dart';
 import '../services/download_service.dart';
 import '../l10n/app_localizations.dart';
+import '../models/cast_member.dart';
+import '../widgets/cast_section.dart';
+import 'person_detail_screen.dart';
 
 class MovieDetailScreen extends StatefulWidget {
   final Movie movie;
@@ -25,7 +29,9 @@ class MovieDetailScreen extends StatefulWidget {
 class _MovieDetailScreenState extends State<MovieDetailScreen> {
   final TmdbService _tmdbService = TmdbService();
   bool _isLoadingTrailer = true;
+  bool _isLoadingCast = false;
   String? _trailerUrl;
+  List<CastMember> _cast = const [];
 
   final FocusNode _backButtonFocus = FocusNode(debugLabel: 'backButton');
   final FocusNode _watchNowFocus = FocusNode(debugLabel: 'watchNow');
@@ -37,9 +43,35 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   void initState() {
     super.initState();
     _loadTrailer();
+    _loadCast();
+  }
+
+  Future<void> _loadCast() async {
+    if (widget.movie.isXtream || widget.movie.id <= 0) return;
+    if (mounted) setState(() => _isLoadingCast = true);
+    final cast = await _tmdbService.getCast(isMovie: true, id: widget.movie.id);
+    if (mounted) setState(() { _cast = cast; _isLoadingCast = false; });
+  }
+
+  void _openPerson(CastMember member) {
+    if (member.id <= 0) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PersonDetailScreen(
+          personId: member.id,
+          name: member.name,
+          profilePath: member.profilePath,
+        ),
+      ),
+    );
   }
 
   Future<void> _loadTrailer() async {
+    if (widget.movie.isXtream) {
+      if (mounted) setState(() => _isLoadingTrailer = false);
+      return;
+    }
     try {
       final videos = await _tmdbService.getMovieVideos(widget.movie.id);
       if (videos.isNotEmpty && mounted) {
@@ -65,10 +97,13 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       context,
       MaterialPageRoute(
         builder: (context) => MediaCustomPlayerScreen(
+          contentId: widget.movie.id,
           tmdbId: widget.movie.isXtream ? null : widget.movie.id,
           isMovie: true,
           title: widget.movie.title,
           releaseYear: int.tryParse(widget.movie.year),
+          posterPath: widget.movie.posterPath,
+          backdropPath: widget.movie.backdropPath,
           customUrl: widget.movie.isXtream
               ? widget.movie.streamUrl
               : (isDownloaded ? 'file://${download!.localVideoPath}' : null),
@@ -167,8 +202,15 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         _buildMainInfo(l10n, isTV),
-                        const SizedBox(height: 60),
+                        const SizedBox(height: 40),
                         _buildGenresSection(),
+                        const SizedBox(height: 32),
+                        CastSection(
+                          cast: _cast,
+                          isLoading: _isLoadingCast,
+                          isTV: isTV,
+                          onPersonTap: _openPerson,
+                        ),
                         const SizedBox(height: 100),
                       ],
                     ),
@@ -270,10 +312,15 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   }
 
   Widget _buildActionButtons(AppLocalizations l10n) {
-    return Consumer<DownloadService>(
-      builder: (context, downloadService, child) {
+    return Consumer2<DownloadService, WatchHistoryProvider>(
+      builder: (context, downloadService, history, child) {
         final downloadId = downloadService.generateId(widget.movie.id, true);
         final download = downloadService.getDownload(downloadId);
+        final canResume = history.resumePositionMs(
+              contentId: widget.movie.id,
+              isMovie: true,
+            ) !=
+            null;
         
         return Wrap(
           spacing: 16,
@@ -282,7 +329,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             SizedBox(
               width: double.infinity,
               child: _buildPremiumAction(
-                label: l10n.translate('watch_now'),
+                label: l10n.translate(canResume ? 'resume' : 'watch_now'),
                 icon: Icons.play_arrow_rounded,
                 focusNode: _watchNowFocus,
                 onPressed: _playMovie,

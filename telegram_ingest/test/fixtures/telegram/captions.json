@@ -1,0 +1,219 @@
+[
+  {
+    "id": "01_structured_english",
+    "caption": "Tiger 3\n2023\nAction\nIMDb 7.1\nA spy returns home to stop a terrorist plot.",
+    "fileName": "Tiger.3.2023.1080p.mp4",
+    "expect": {
+      "titleIncludes": "Tiger",
+      "year": 2023,
+      "genresIncludes": "Action",
+      "rating": 7.1,
+      "quality": "1080p"
+    }
+  },
+  {
+    "id": "02_sorani_english_title",
+    "caption": "تايگەر ٣\nTiger 3\n(2023)\nئەکشن / دراما\nنمرە: 7.1\nدوبلاژ سۆرانی\nپوختە: فیلمێکی هیندی دەربارەی سیخوڕێک.",
+    "expect": {
+      "titleIncludes": "Tiger",
+      "year": 2023,
+      "genresIncludes": "Action",
+      "language": "Kurdish Sorani",
+      "rating": 7.1
+    }
+  },
+  {
+    "id": "03_badini",
+    "caption": "Fîlmê nû\nKomedî\nBadînî\n2021\nNaav: Duhok Story\nRating: 6.4",
+    "expect": {
+      "year": 2021,
+      "genresIncludes": "Comedy",
+      "language": "Kurdish Badini",
+      "rating": 6.4
+    }
+  },
+  {
+    "id": "04_arabic_title",
+    "caption": "النمر 3\nسنة 2023\nأكشن\nتقييم 8.2/10\nقصة فيلم عربي عن عميل سري يعود إلى وطنه.",
+    "expect": {
+      "year": 2023,
+      "genresIncludes": "Action",
+      "rating": 8.2
+    }
+  },
+  {
+    "id": "05_missing_year",
+    "caption": "Shamal Wind\nDrama, Romance\nKurdish Sorani dubbed\nA village love story across two mountains.",
+    "expect": {
+      "titleIncludes": "Shamal",
+      "year": null,
+      "genresIncludes": "Drama"
+    }
+  },
+  {
+    "id": "06_missing_genre",
+    "caption": "Night Train\n(2019)\nIMDb 5.1\nA quiet ride turns dangerous after midnight.",
+    "expect": {
+      "titleIncludes": "Night Train",
+      "year": 2019,
+      "rating": 5.1,
+      "genresEmpty": true
+    }
+  },
+  {
+    "id": "07_missing_rating",
+    "caption": "Kurdish Mountain\n2020\nAdventure / Family\nسۆرانی",
+    "expect": {
+      "year": 2020,
+      "genresIncludes": "Adventure",
+      "rating": null
+    }
+  },
+  {
+    "id": "08_title_at_beginning",
+    "caption": "Red River\nYear: 2018\nGenre: Thriller\nLanguage: English",
+    "expect": {
+      "titleIncludes": "Red River",
+      "year": 2018,
+      "genresIncludes": "Thriller",
+      "language": "English"
+    }
+  },
+  {
+    "id": "09_title_in_middle",
+    "caption": "🎬 فیلمی نوێ\nژانر: کۆمیدی\nناونیشان: Cafe Erbil\nساڵ: 2022\nHD",
+    "expect": {
+      "titleIncludes": "Cafe Erbil",
+      "year": 2022,
+      "genresIncludes": "Comedy",
+      "quality": "720p"
+    }
+  },
+  {
+    "id": "10_title_at_end",
+    "caption": "2024\nHorror | Mystery\nArabic dubbed\nWatch now on our channel\n#FullMovie\nHouse of Dust",
+    "expect": {
+      "titleIncludes": "House of Dust",
+      "year": 2024,
+      "genresIncludes": "Horror"
+    }
+  },
+  {
+    "id": "11_emojis",
+    "caption": "🔥🔥 Super Cop 🔥🔥\n⭐ 2021 ⭐\n🎭 Comedy 🎭\n📺 FHD\n❤️ Join t.me/example",
+    "expect": {
+      "titleIncludes": "Super Cop",
+      "year": 2021,
+      "genresIncludes": "Comedy",
+      "quality": "1080p"
+    }
+  },
+  {
+    "id": "12_hashtags",
+    "caption": "#KurdishMovie #Sorani #Action\n#ShadowValley 2017\n#1080p\nSubscribe and share!",
+    "expect": {
+      "year": 2017,
+      "quality": "1080p"
+    }
+  },
+  {
+    "id": "13_punctuation",
+    "caption": "***  PATHFINDER  ***\n--- 2016 ---\n!!! Adventure / War !!!\nRating.....8.0/10",
+    "expect": {
+      "titleIncludes": "PATHFINDER",
+      "year": 2016,
+      "genresIncludes": "Adventure",
+      "rating": 8
+    }
+  },
+  {
+    "id": "14_long_description",
+    "caption": "The Last Shepherd\n2015\nDrama\nThis is a very long description that talks about a shepherd living in the mountains of Kurdistan, his family, the changing seasons, political tension in the valley, and a journey that takes him from his village to the city and back again while searching for a lost son. The story continues for many paragraphs and should not be treated as the title. IMDb 7.8",
+    "expect": {
+      "titleIncludes": "The Last Shepherd",
+      "year": 2015,
+      "genresIncludes": "Drama",
+      "rating": 7.8,
+      "descriptionIncludes": "shepherd"
+    }
+  },
+  {
+    "id": "15_short_caption",
+    "caption": "Bakur 2015",
+    "expect": {
+      "titleIncludes": "Bakur",
+      "year": 2015
+    }
+  },
+  {
+    "id": "16_random_numbers",
+    "caption": "City Lights\nRuntime 2:21:35\nAudio 5.1\n1080p 4K not really\nYear (2011)\nDo not read 480 as a year.",
+    "expect": {
+      "titleIncludes": "City Lights",
+      "year": 2011,
+      "quality": "1080p",
+      "rating": null
+    }
+  },
+  {
+    "id": "17_channel_branding",
+    "caption": "📢 کەناڵی فیلم\nSubscribe | Join | Share\nt.me/wavefilms\nفیلمی نوێ\nBlue Olive\n(2020)\nComedy",
+    "expect": {
+      "titleIncludes": "Blue Olive",
+      "year": 2020,
+      "genresIncludes": "Comedy"
+    }
+  },
+  {
+    "id": "18_filename_only_signal",
+    "caption": "New upload\n1080p\nJoin our channel",
+    "fileName": "Jiyan.2014.Kurdish.mp4",
+    "expect": {
+      "titleIncludes": "Jiyan",
+      "year": 2014,
+      "quality": "1080p"
+    }
+  },
+  {
+    "id": "19_emptyish",
+    "caption": "   \n\n  ",
+    "expect": {
+      "title": null,
+      "year": null,
+      "rating": null
+    }
+  },
+  {
+    "id": "20_paragraph_embedded",
+    "caption": "ئەمڕۆ فیلمی Mountain Bride (2022) بە دوبلاژی سۆرانی بڵاودەکەینەوە ژانر ڕۆمانس و دراما نمرە 6.9 کوالیتی FHD.",
+    "expect": {
+      "titleIncludes": "Mountain Bride",
+      "year": 2022,
+      "genresIncludes": "Romance",
+      "language": "Kurdish Sorani",
+      "rating": 6.9,
+      "quality": "1080p"
+    }
+  },
+  {
+    "id": "21_arabic_indic_year",
+    "caption": "سوارەی شەو\nساڵ ٢٠٢٣\nئەکشن\nعربی",
+    "expect": {
+      "year": 2023,
+      "genresIncludes": "Action",
+      "language": "Arabic"
+    }
+  },
+  {
+    "id": "22_turkish_persian_hindi_mix",
+    "caption": "Bollywood Night\nHindi\n2023\nRomance / Music\nIMDb 7.4\nUHD",
+    "expect": {
+      "titleIncludes": "Bollywood",
+      "year": 2023,
+      "language": "Hindi",
+      "genresIncludes": "Romance",
+      "quality": "2160p",
+      "rating": 7.4
+    }
+  }
+]

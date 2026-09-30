@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.livewave.kurdlogs" "\0"
-            VALUE "FileDescription", "live_wave" "\0"
+            VALUE "FileDescription", "WAVE" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "live_wave" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2025 com.livewave.kurdlogs. All rights reserved." "\0"
             VALUE "OriginalFilename", "live_wave.exe" "\0"
-            VALUE "ProductName", "live_wave" "\0"
+            VALUE "ProductName", "WAVE" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

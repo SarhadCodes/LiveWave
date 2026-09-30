@@ -14,13 +14,27 @@ class DownloadsScreen extends StatelessWidget {
   void _playDownload(BuildContext context, DownloadItem item) {
     if (item.status != DownloadStatus.completed) return;
 
+    int? season;
+    int? episode;
+    if (!item.isMovie) {
+      final match = RegExp(r'_s(\d+)_e(\d+)').firstMatch(item.id);
+      if (match != null) {
+        season = int.tryParse(match.group(1)!);
+        episode = int.tryParse(match.group(2)!);
+      }
+    }
+
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => MediaCustomPlayerScreen(
+          contentId: item.tmdbId,
           tmdbId: item.tmdbId,
           isMovie: item.isMovie,
           title: item.title,
+          season: season,
+          episode: episode,
+          posterPath: item.posterPath,
           customUrl: 'file://${item.localVideoPath}',
           customSubtitleUrl: item.localSubtitlePath != null ? 'file://${item.localSubtitlePath}' : null,
         ),

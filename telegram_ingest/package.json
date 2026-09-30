@@ -1,0 +1,21 @@
+{
+  "name": "wave-telegram-ingest",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Zero-cost Telegram → WAVE movie ingestion worker",
+  "scripts": {
+    "start": "node src/index.js",
+    "login": "node scripts/login.js",
+    "test": "node --test test/parser.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "telegram": "^2.26.16"
+  }
+}

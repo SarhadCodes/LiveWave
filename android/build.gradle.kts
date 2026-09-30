@@ -17,14 +17,14 @@ allprojects {
 
 // Fix for plugins missing namespaces or having old manifest package attributes
 subprojects {
-    if (project.name == "better_player" || project.name == "ota_update") {
+    if (project.name == "ota_update") {
         project.afterEvaluate {
             try {
                 val android = project.extensions.findByName("android")
                 if (android != null) {
                     val setNamespace = android.javaClass.getMethod("setNamespace", String::class.java)
                     // Note: ota_update uses 'otaupdate' without the dot in its internal manifest
-                    val namespace = if (project.name == "better_player") "com.jhomlala.better_player" else "sk.fourq.otaupdate"
+                    val namespace = "sk.fourq.otaupdate"
                     setNamespace.invoke(android, namespace)
                 }
             } catch (e: Exception) {

@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Live Wave</string>
+	<string>WAVE</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -13,7 +13,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>live_wave</string>
+	<string>WAVE</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -57,11 +57,11 @@
 		<true/>
 	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>Live Wave needs camera access to upload channel logos in the admin panel.</string>
+	<string>WAVE needs camera access to upload channel logos in the admin panel.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Live Wave needs photo library access to upload channel logos in the admin panel.</string>
+	<string>WAVE needs photo library access to upload channel logos in the admin panel.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>Live Wave needs permission to save images to your photo library.</string>
+	<string>WAVE needs permission to save images to your photo library.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>fetch</string>

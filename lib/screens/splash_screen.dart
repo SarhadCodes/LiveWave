@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -6,8 +7,10 @@ import '../providers/movies_provider.dart';
 import '../providers/tv_shows_provider.dart';
 import '../providers/settings_provider.dart';
 import '../providers/activation_provider.dart';
+import '../providers/favorites_provider.dart';
 import '../widgets/app_navigation.dart';
 import '../config/app_theme.dart';
+import '../services/user_content_cleanup.dart';
 
 import '../utils/security_utils.dart';
 import '../screens/security_block_screen.dart';
@@ -35,7 +38,20 @@ class _SplashScreenState extends State<SplashScreen> {
       await settings.ensureLoaded();
 
       final activation = Provider.of<ActivationProvider>(context, listen: false);
+      final favoritesProvider = Provider.of<FavoritesProvider>(context, listen: false);
+      final previousStatus = activation.status;
       await activation.resolve(settings);
+      await UserContentCleanup.onActivationStatusChange(
+        previous: previousStatus,
+        current: activation.status,
+        channels: channelsProvider,
+        favorites: favoritesProvider,
+      );
+
+      // Show the full catalog (live TV, movies, series) regardless of activation.
+      channelsProvider.setPreviewLimited(false);
+      moviesProvider.setPreviewLimited(false);
+      tvShowsProvider.setPreviewLimited(false);
 
       channelsProvider.setContentSource(settings.contentSource);
       moviesProvider.setContentSource(settings.contentSource);
@@ -55,14 +71,17 @@ class _SplashScreenState extends State<SplashScreen> {
         return;
       }
       
+      // Preload movies & TV during splash so those tabs open within ~3 seconds.
+      unawaited(moviesProvider.fetchAllMovies());
+      unawaited(tvShowsProvider.fetchAllTvShows());
+
       try {
-        // Load channels only at startup — movies/shows load when user opens those tabs
         await channelsProvider.fetchChannels().timeout(const Duration(seconds: 10));
       } catch (e) {
         debugPrint('Initialization error or timeout: $e');
       }
-      
-      // Premium splash duration (3 seconds minimum)
+
+      // Premium splash duration (3 seconds minimum) — media keeps loading in background
       final diff = DateTime.now().difference(startTime);
       if (diff.inMilliseconds < 3000) {
         await Future.delayed(Duration(milliseconds: 3000 - diff.inMilliseconds));
@@ -147,7 +166,7 @@ class _SplashScreenState extends State<SplashScreen> {
                     
                     // App Name
                     Text(
-                      'LIVE WAVE',
+                      'WAVE',
                       style: TextStyle(
                         color: AppTheme.textPrimary,
                         fontSize: 36,

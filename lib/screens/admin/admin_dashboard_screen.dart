@@ -7,9 +7,10 @@ import '../../services/firestore_service.dart';
 import '../../config/app_theme.dart';
 import '../../widgets/channel_logo.dart';
 import 'admin_devices_tab.dart';
+import 'admin_telegram_tab.dart';
 
 /// Admin panel tab modes
-enum _AdminTab { movies, tvShows, channels, devices }
+enum _AdminTab { movies, tvShows, channels, devices, telegram }
 
 class AdminDashboardScreen extends StatefulWidget {
   const AdminDashboardScreen({super.key});
@@ -41,7 +42,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     if (_activeTab == _AdminTab.channels) {
       final data = await _firestoreService.getAllChannels();
       setState(() { _channels = data; _isLoading = false; });
-    } else if (_activeTab == _AdminTab.devices) {
+    } else if (_activeTab == _AdminTab.devices || _activeTab == _AdminTab.telegram) {
       setState(() => _isLoading = false);
     } else {
       final data = await _firestoreService.getAllOverrides(isMovie: _activeTab == _AdminTab.movies);
@@ -356,16 +357,21 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           // ── Tab Toggle ──
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-            child: Row(
-              children: [
-                _buildTab('🎬 MOVIES', _AdminTab.movies),
-                const SizedBox(width: 8),
-                _buildTab('📺 TV SHOWS', _AdminTab.tvShows),
-                const SizedBox(width: 8),
-                _buildTab('📡 CHANNELS', _AdminTab.channels),
-                const SizedBox(width: 8),
-                _buildTab('📱 DEVICES', _AdminTab.devices),
-              ],
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  _buildTab('🎬 MOVIES', _AdminTab.movies),
+                  const SizedBox(width: 8),
+                  _buildTab('📺 TV SHOWS', _AdminTab.tvShows),
+                  const SizedBox(width: 8),
+                  _buildTab('📡 CHANNELS', _AdminTab.channels),
+                  const SizedBox(width: 8),
+                  _buildTab('📱 DEVICES', _AdminTab.devices),
+                  const SizedBox(width: 8),
+                  _buildTab('📥 TELEGRAM', _AdminTab.telegram),
+                ],
+              ),
             ),
           ),
 
@@ -379,11 +385,15 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                     ? _buildChannelList()
                     : _activeTab == _AdminTab.devices
                         ? AdminDevicesTab(key: _devicesTabKey)
-                        : _buildOverrideList(),
+                        : _activeTab == _AdminTab.telegram
+                            ? const AdminTelegramTab()
+                            : _buildOverrideList(),
           ),
         ],
       ),
-      floatingActionButton: _activeTab == _AdminTab.devices
+      floatingActionButton: _activeTab == _AdminTab.telegram
+          ? null
+          : _activeTab == _AdminTab.devices
           ? FloatingActionButton.extended(
               onPressed: () => _devicesTabKey.currentState?.openAddDialog(),
               backgroundColor: AppTheme.primaryColor,
@@ -610,26 +620,22 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
   Widget _buildTab(String label, _AdminTab tab) {
     final active = _activeTab == tab;
-    return Expanded(
-      child: GestureDetector(
-        onTap: () { setState(() => _activeTab = tab); _loadData(); },
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          decoration: BoxDecoration(
-            color: active ? AppTheme.primaryColor : Colors.white10,
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Center(
-            child: Text(label,
-                style: TextStyle(
-                  color: active ? Colors.black : Colors.white60,
-                  fontWeight: FontWeight.w900,
-                  fontSize: 12,
-                  letterSpacing: 0.5,
-                )),
-          ),
+    return GestureDetector(
+      onTap: () { setState(() => _activeTab = tab); _loadData(); },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+        decoration: BoxDecoration(
+          color: active ? AppTheme.primaryColor : Colors.white10,
+          borderRadius: BorderRadius.circular(10),
         ),
+        child: Text(label,
+            style: TextStyle(
+              color: active ? Colors.black : Colors.white60,
+              fontWeight: FontWeight.w900,
+              fontSize: 12,
+              letterSpacing: 0.5,
+            )),
       ),
     );
   }

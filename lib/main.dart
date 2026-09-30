@@ -14,6 +14,9 @@ import 'providers/movies_provider.dart';
 import 'providers/tv_shows_provider.dart';
 import 'providers/favorites_provider.dart';
 import 'providers/activation_provider.dart';
+import 'providers/watch_history_provider.dart';
+import 'providers/wave_library_provider.dart';
+import 'providers/wave_provider.dart';
 import 'services/download_service.dart';
 import 'utils/platform_detector.dart';
 
@@ -35,7 +38,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  debugPrint('--- LIVE WAVE STARTING ---');
+  debugPrint('--- WAVE STARTING ---');
   
   // Initialize Firebase with a timeout to prevent hanging on Desktop if config is missing
   try {
@@ -102,6 +105,13 @@ class LiveWaveApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => MoviesProvider()),
         ChangeNotifierProvider(create: (_) => TvShowsProvider()),
         ChangeNotifierProvider(create: (_) => FavoritesProvider()),
+        ChangeNotifierProvider(create: (_) => WatchHistoryProvider()),
+        ChangeNotifierProvider(create: (_) => WaveLibraryProvider()),
+        ChangeNotifierProvider(
+          create: (context) => WaveProvider(
+            library: Provider.of<WaveLibraryProvider>(context, listen: false),
+          ),
+        ),
         ChangeNotifierProvider(create: (_) => ActivationProvider()),
         ChangeNotifierProvider(create: (_) => DownloadService(), lazy: false),
       ],
@@ -119,7 +129,7 @@ class LiveWaveApp extends StatelessWidget {
           });
           
           return MaterialApp(
-            title: 'Live Wave',
+            title: 'WAVE',
             debugShowCheckedModeBanner: false,
             theme: AppTheme.darkTheme,
             locale: Locale(settings.language),

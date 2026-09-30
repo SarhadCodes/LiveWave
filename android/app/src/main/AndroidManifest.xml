@@ -15,11 +15,11 @@
         android:required="false" />
     
     <application
-        android:label="Live Wave"
+        android:label="WAVE"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:banner="@drawable/banner"
-        android:logo="@drawable/banner"
+        android:logo="@mipmap/ic_launcher"
         android:isGame="false"
         android:largeHeap="true"
         android:hardwareAccelerated="true"
@@ -31,7 +31,9 @@
             android:taskAffinity=""
             android:theme="@style/LaunchTheme"
             android:banner="@drawable/banner"
-            android:logo="@drawable/banner"
+            android:logo="@mipmap/ic_launcher"
+            android:supportsPictureInPicture="true"
+            android:resizeableActivity="true"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
             android:screenOrientation="unspecified"

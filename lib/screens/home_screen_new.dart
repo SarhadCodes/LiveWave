@@ -13,6 +13,8 @@ import '../services/player_launcher.dart';
 import '../providers/settings_provider.dart';
 import 'player_screen.dart';
 import '../providers/favorites_provider.dart';
+import '../providers/watch_history_provider.dart';
+import '../widgets/continue_watching_row.dart';
 import '../models/movie.dart';
 import '../models/tv_show.dart';
 import '../widgets/media_card.dart';
@@ -125,8 +127,8 @@ class _HomeScreenNewState extends State<HomeScreenNew> {
     
     return Scaffold(
       backgroundColor: AppTheme.backgroundColor,
-      body: Consumer3<ChannelsProvider, SettingsProvider, FavoritesProvider>(
-        builder: (context, channelProv, settings, favorites, _) {
+      body: Consumer4<ChannelsProvider, SettingsProvider, FavoritesProvider, WatchHistoryProvider>(
+        builder: (context, channelProv, settings, favorites, history, _) {
           final isMobile = settings.layoutMode == 'mobile';
           final horizontalPadding = isMobile ? AppTheme.spacingM : AppTheme.spacingXXL;
 
@@ -144,6 +146,14 @@ class _HomeScreenNewState extends State<HomeScreenNew> {
                 
                 const SizedBox(height: AppTheme.spacingL),
 
+                if (history.continueWatching.isNotEmpty) ...[
+                  ContinueWatchingRow(
+                    items: history.continueWatching,
+                    isMobile: isMobile,
+                  ),
+                  const SizedBox(height: 8),
+                ],
+
                 // --- FAVORITE TV CHANNELS ---
                 if (channelProv.favoriteChannels.isNotEmpty) ...[
                   Padding(
@@ -157,8 +167,8 @@ class _HomeScreenNewState extends State<HomeScreenNew> {
                           shrinkWrap: true,
                           physics: const NeverScrollableScrollPhysics(),
                           gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-                            maxCrossAxisExtent: isMobile ? 120 : 110,
-                            childAspectRatio: 1.1,
+                            maxCrossAxisExtent: isMobile ? 160 : 180,
+                            childAspectRatio: 1.0,
                             crossAxisSpacing: 12,
                             mainAxisSpacing: 12,
                           ),
@@ -267,7 +277,8 @@ class _HomeScreenNewState extends State<HomeScreenNew> {
                 // If everything is empty, show a unified placeholder
                 if (channelProv.favoriteChannels.isEmpty && 
                     favorites.favoriteMovies.isEmpty && 
-                    favorites.favoriteTvShows.isEmpty)
+                    favorites.favoriteTvShows.isEmpty &&
+                    history.continueWatching.isEmpty)
                   Center(
                     child: Padding(
                       padding: const EdgeInsets.symmetric(vertical: 80, horizontal: 40),

@@ -27,7 +27,8 @@ class MediaWebPlayerScreen extends StatefulWidget {
   State<MediaWebPlayerScreen> createState() => _MediaWebPlayerScreenState();
 }
 
-class _MediaWebPlayerScreenState extends State<MediaWebPlayerScreen> {
+class _MediaWebPlayerScreenState extends State<MediaWebPlayerScreen>
+    with WidgetsBindingObserver {
   late final WebViewController _controller;
   bool _isLoading = true;
   String _initialLayoutMode = 'tv';
@@ -35,13 +36,11 @@ class _MediaWebPlayerScreenState extends State<MediaWebPlayerScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     
     // Get initial layout mode to restore it later
     final settings = Provider.of<SettingsProvider>(context, listen: false);
     _initialLayoutMode = settings.layoutMode;
-    
-    // Hide system UI (status bars and navigation bars) to make it fully immersive
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     
     // Construct the Vidking embed URL
     final url = widget.isMovie
@@ -91,31 +90,50 @@ class _MediaWebPlayerScreenState extends State<MediaWebPlayerScreen> {
 
     _controller = controller;
 
-    // Force landscape mode for video playing
-    SystemChrome.setPreferredOrientations([
+    _lockToLandscape();
+  }
+
+  void _lockToLandscape() {
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    SystemChrome.setPreferredOrientations(const [
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
     ]);
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) {
+      _lockToLandscape();
+    }
+  }
+
+  @override
+  void didChangeMetrics() {
+    if (!mounted) return;
+    final views = WidgetsBinding.instance.platformDispatcher.views;
+    if (views.isEmpty) return;
+    final view = views.first;
+    if (view.physicalSize.height > view.physicalSize.width) {
+      _lockToLandscape();
+    }
+  }
+
+  @override
   void dispose() {
-    // Restore orientation based on layout mode
+    WidgetsBinding.instance.removeObserver(this);
     if (_initialLayoutMode == 'tv') {
-      SystemChrome.setPreferredOrientations([
+      SystemChrome.setPreferredOrientations(const [
         DeviceOrientation.landscapeLeft,
         DeviceOrientation.landscapeRight,
       ]);
     } else {
-      SystemChrome.setPreferredOrientations([
+      SystemChrome.setPreferredOrientations(const [
         DeviceOrientation.portraitUp,
         DeviceOrientation.portraitDown,
       ]);
     }
-    
-    // Restore system UI
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-    
     super.dispose();
   }
 

@@ -95,7 +95,7 @@ class _AppHeaderState extends State<AppHeader> {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Text(
-            'LIVE WAVE',
+            'WAVE',
             style: TextStyle(
               color: AppTheme.primaryColor,
               fontSize: isMobile ? 18 : 16, // Reduced from 22

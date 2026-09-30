@@ -37,6 +37,17 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
+            isMinifyEnabled = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+        }
+    }
+
+    packaging {
+        jniLibs {
+            pickFirsts += listOf("lib/**/libc++_shared.so")
         }
     }
 }
@@ -44,15 +55,32 @@ android {
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
 
+    implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("com.google.android.material:material:1.12.0")
+
     val media3Version = "1.3.1"
     implementation("androidx.media3:media3-exoplayer:$media3Version")
     implementation("androidx.media3:media3-exoplayer-hls:$media3Version")
-    implementation("androidx.media3:media3-exoplayer-dash:$media3Version")
-    implementation("androidx.media3:media3-ui:$media3Version")
-    // Software decode fallback for H.265/HEVC and other codecs when hardware lacks support
+    implementation("androidx.media3:media3-extractor:$media3Version")
+    implementation("androidx.media3:media3-datasource-okhttp:$media3Version")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // Software decode fallback for H.265/MPEG-2 when hardware decoders fail (audio-only symptom).
     implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.3.1+2")
+    // Needed for OnBackPressedDispatcher used by the live TV player back handler
+    implementation("androidx.activity:activity-ktx:1.9.3")
 }
 
 flutter {
     source = "../.."
+}
+
+// TV leanback launcher banner only — not used for in-app branding or phone launcher icon.
+tasks.register<Copy>("copyTvBanner") {
+    from("../../assets/banner.png")
+    into("src/main/res/drawable-nodpi")
+    rename { "banner.png" }
+}
+
+tasks.named("preBuild") {
+    dependsOn("copyTvBanner")
 }

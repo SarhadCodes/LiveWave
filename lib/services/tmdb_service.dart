@@ -1,8 +1,16 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import '../models/cast_member.dart';
 import '../models/movie.dart';
 import '../models/tv_show.dart';
+
+class PersonFilmography {
+  final List<Movie> movies;
+  final List<TvShow> tvShows;
+
+  const PersonFilmography({required this.movies, required this.tvShows});
+}
 
 class TmdbService {
   // TODO: Replace with your actual TMDB API key
@@ -168,6 +176,103 @@ class TmdbService {
       return {};
     } catch (e) {
       return {};
+    }
+  }
+
+  /// Movie or TV billed cast (acting credits only).
+  Future<List<CastMember>> getCast({required bool isMovie, required int id}) async {
+    if (id <= 0) return const [];
+    try {
+      final kind = isMovie ? 'movie' : 'tv';
+      final url = '$_baseUrl/$kind/$id/credits?api_key=$_apiKey';
+      final response = await http.get(Uri.parse(url));
+      if (response.statusCode != 200) return const [];
+      final data = json.decode(response.body) as Map<String, dynamic>;
+      final raw = data['cast'] as List<dynamic>? ?? const [];
+      return raw
+          .whereType<Map>()
+          .map((e) => CastMember.fromJson(Map<String, dynamic>.from(e)))
+          .where((c) => c.id > 0 && c.name.isNotEmpty)
+          .take(20)
+          .toList();
+    } catch (e) {
+      debugPrint('[TmdbService] credits error: $e');
+      return const [];
+    }
+  }
+
+  Future<Map<String, dynamic>> getPersonDetails(int personId) async {
+    if (personId <= 0) return {};
+    try {
+      final url = '$_baseUrl/person/$personId?api_key=$_apiKey';
+      final response = await http.get(Uri.parse(url));
+      if (response.statusCode == 200) {
+        return json.decode(response.body) as Map<String, dynamic>;
+      }
+      return {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  /// Movies and TV shows this person acted in, sorted by popularity.
+  Future<PersonFilmography> getPersonFilmography(int personId) async {
+    if (personId <= 0) {
+      return const PersonFilmography(movies: [], tvShows: []);
+    }
+    try {
+      final url = '$_baseUrl/person/$personId/combined_credits?api_key=$_apiKey';
+      final response = await http.get(Uri.parse(url));
+      if (response.statusCode != 200) {
+        return const PersonFilmography(movies: [], tvShows: []);
+      }
+      final data = json.decode(response.body) as Map<String, dynamic>;
+      final raw = data['cast'] as List<dynamic>? ?? const [];
+
+      final movies = <int, Movie>{};
+      final shows = <int, TvShow>{};
+
+      for (final item in raw) {
+        if (item is! Map) continue;
+        final map = Map<String, dynamic>.from(item);
+        final mediaType = (map['media_type'] ?? '').toString();
+        final id = (map['id'] as num?)?.toInt();
+        if (id == null || id <= 0) continue;
+        if (map['adult'] == true) continue;
+
+        if (mediaType == 'movie') {
+          try {
+            final movie = Movie.fromJson(map);
+            if (movie.title.isEmpty) continue;
+            final existing = movies[id];
+            if (existing == null || movie.popularity > existing.popularity) {
+              movies[id] = movie;
+            }
+          } catch (_) {}
+        } else if (mediaType == 'tv') {
+          try {
+            final show = TvShow.fromJson(map);
+            if (show.name.isEmpty) continue;
+            final existing = shows[id];
+            if (existing == null || show.popularity > existing.popularity) {
+              shows[id] = show;
+            }
+          } catch (_) {}
+        }
+      }
+
+      final movieList = movies.values.toList()
+        ..sort((a, b) => b.popularity.compareTo(a.popularity));
+      final showList = shows.values.toList()
+        ..sort((a, b) => b.popularity.compareTo(a.popularity));
+
+      return PersonFilmography(
+        movies: movieList.take(40).toList(),
+        tvShows: showList.take(40).toList(),
+      );
+    } catch (e) {
+      debugPrint('[TmdbService] person credits error: $e');
+      return const PersonFilmography(movies: [], tvShows: []);
     }
   }
 

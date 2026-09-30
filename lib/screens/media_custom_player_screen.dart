@@ -9,12 +9,16 @@ import 'package:http/http.dart' as http;
 import 'dart:async';
 import 'dart:convert';
 import 'package:live_wave/config/app_theme.dart';
+import 'package:live_wave/iptv_exo_player.dart';
+import 'package:live_wave/providers/watch_history_provider.dart';
 import 'package:live_wave/services/subtitle_service.dart';
 import 'package:live_wave/services/firestore_service.dart';
 import 'package:live_wave/utils/platform_detector.dart';
+import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class MediaCustomPlayerScreen extends StatefulWidget {
+  final int? contentId;
   final int? tmdbId;
   final bool isMovie;
   final String title;
@@ -24,9 +28,13 @@ class MediaCustomPlayerScreen extends StatefulWidget {
   final int? releaseYear;
   final String? customUrl;
   final String? customSubtitleUrl;
+  final String? posterPath;
+  final String? backdropPath;
+  final int? xtreamSeriesId;
 
   const MediaCustomPlayerScreen({
     super.key,
+    this.contentId,
     this.tmdbId,
     required this.isMovie,
     required this.title,
@@ -36,18 +44,19 @@ class MediaCustomPlayerScreen extends StatefulWidget {
     this.releaseYear,
     this.customUrl,
     this.customSubtitleUrl,
+    this.posterPath,
+    this.backdropPath,
+    this.xtreamSeriesId,
   });
 
   @override
   State<MediaCustomPlayerScreen> createState() => _MediaCustomPlayerScreenState();
 }
 
-class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen> {
-  // Native Bridge
-  MethodChannel? _nativeChannel;
+class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen>
+    with WidgetsBindingObserver {
+  IptvExoPlayerController? _exoPlayer;
   static const _utilsChannel = MethodChannel('com.livewave.player/utils');
-  int _viewId = 0;
-  
   // State
   bool _isLoading = true;
   String _statusMessage = 'INITIALIZING...';
@@ -74,6 +83,8 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen> {
   bool _hardwareAcceleration = true;
   Timer? _positionTimer;
   bool _isExiting = false;
+  bool _didSeekResume = false;
+  WatchHistoryProvider? _watchHistory;
   
   // Settings UI State
   bool _showSettings = false;
@@ -130,21 +141,55 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WakelockPlus.enable();
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    SystemChrome.setPreferredOrientations([
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
+    _lockToLandscape();
     
     _loadSavedSettings();
-    
+
     // Request initial focus for TV navigation
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _mainUIFocusNode.requestFocus();
     });
 
     _startPlaybackSequence();
+  }
+
+  int? get _historyContentId => widget.contentId ?? widget.tmdbId;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _watchHistory ??= Provider.of<WatchHistoryProvider>(context, listen: false);
+  }
+
+  void _lockToLandscape() {
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    SystemChrome.setPreferredOrientations(const [
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) {
+      _lockToLandscape();
+    } else if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused) {
+      unawaited(_saveWatchProgress(notify: false));
+    }
+  }
+
+  @override
+  void didChangeMetrics() {
+    if (!mounted) return;
+    final views = WidgetsBinding.instance.platformDispatcher.views;
+    if (views.isEmpty) return;
+    final view = views.first;
+    if (view.physicalSize.height > view.physicalSize.width) {
+      _lockToLandscape();
+    }
   }
 
   Future<void> _loadSavedSettings() async {
@@ -418,6 +463,7 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen> {
       _isLoading = false;
       _statusMessage = 'READY';
     });
+    unawaited(_startNativePlayback());
     _startHideTimer();
     _startPositionTimer();
     _loadSubtitleFile();
@@ -461,82 +507,154 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen> {
 
   void _startPositionTimer() {
     _positionTimer?.cancel();
-    _positionTimer = Timer.periodic(const Duration(milliseconds: 200), (timer) {
-      if (!mounted || _allSubtitles.isEmpty) return;
-      
-      // Use _positionMs which is already updated by native onPlayerStatus callback
+    _positionTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
+      if (!mounted || _exoPlayer == null) return;
+      try {
+        final pos = await _exoPlayer!.getPosition();
+        if (!mounted) return;
+        setState(() {
+          _positionMs = (pos['position'] as num?)?.toInt() ?? _positionMs;
+          _durationMs = (pos['duration'] as num?)?.toInt() ?? _durationMs;
+          _isPlaying = pos['isPlaying'] as bool? ?? _isPlaying;
+        });
+        if (timer.tick % 5 == 0) {
+          unawaited(_saveWatchProgress(notify: false));
+        }
+      } catch (_) {}
+
+      if (_allSubtitles.isEmpty) return;
       final int currentMs = _positionMs + (_subtitleDelay * 1000).toInt();
-      
       SubtitleLine? active;
-      for (int i = 0; i < _allSubtitles.length; i++) {
-        final s = _allSubtitles[i].start.inMilliseconds;
-        final e = _allSubtitles[i].end.inMilliseconds;
+      for (final line in _allSubtitles) {
+        final s = line.start.inMilliseconds;
+        final e = line.end.inMilliseconds;
         if (currentMs >= s - 500 && currentMs <= e + 300) {
-          active = _allSubtitles[i];
+          active = line;
           break;
         }
       }
-      
-      if (_currentSubtitle != active) {
+      if (_currentSubtitle != active && mounted) {
         setState(() => _currentSubtitle = active);
       }
     });
   }
 
-  void _onPlatformViewCreated(int id) {
-    _viewId = id;
-    _nativeChannel = MethodChannel('com.livewave.player/exoplayer_$id');
-    _nativeChannel!.setMethodCallHandler(_handleNativeCallback);
-    if (_videoUrl != null) {
-      _nativeChannel!.invokeMethod('play', {
-        'url': _videoUrl,
-        'subtitleUrl': null,
-        'headers': {'User-Agent': 'Mozilla/5.0'},
-      });
-      _nativeChannel!.invokeMethod('setAspectRatio', {
-        'ratio': _aspectValues[_aspectRatioIndex],
-      });
-    }
-    // Safe focus trigger
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _mainUIFocusNode.requestFocus();
-    });
-  }
-
-  Future<void> _handleNativeCallback(MethodCall call) async {
-    if (call.method == 'onPlayerStatus') {
-      final args = Map<String, dynamic>.from(call.arguments);
+  Future<void> _startNativePlayback() async {
+    final url = _videoUrl;
+    if (url == null || url.isEmpty) return;
+    try {
+      _exoPlayer ??= IptvExoPlayerController();
+      _exoPlayer!.onEvent = (event, data) {
+        if (_didSeekResume) return;
+        final ready = event == 'firstFrameRendered' ||
+            event == 'playing' ||
+            (event == 'stateChanged' && data['state'] == 'READY');
+        if (ready) {
+          unawaited(_resumeIfNeeded());
+        }
+      };
+      await _exoPlayer!.ensureInitialized();
+      if (mounted) setState(() {});
+      await _exoPlayer!.mountTextureAndAttachSurface();
+      await _exoPlayer!.setVodSource(
+        url,
+        headers: {'User-Agent': 'Mozilla/5.0'},
+        subtitleUrl: _subtitleUrl,
+      );
+      _exoPlayer!.applyAspectRatio(modeIndex: _aspectRatioIndex);
       if (mounted) {
         setState(() {
-          _positionMs = args['position'] ?? 0;
-          _durationMs = args['duration'] ?? 0;
-          _statusMessage = args['status'] ?? 'ready';
-          _isPlaying = (_statusMessage != 'buffering' && _statusMessage != 'ended');
+          _isLoading = false;
+          _statusMessage = 'playing';
+          _isPlaying = true;
+        });
+      }
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _mainUIFocusNode.requestFocus();
+      });
+    } catch (e) {
+      debugPrint('[VOD] playback start failed: $e');
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _statusMessage = 'NO STREAMS FOUND';
         });
       }
     }
   }
 
+  Future<void> _resumeIfNeeded() async {
+    if (_didSeekResume || !mounted) return;
+    final contentId = _historyContentId;
+    final history = _watchHistory;
+    if (contentId == null || history == null) return;
+    final start = history.resumePositionMs(
+      contentId: contentId,
+      isMovie: widget.isMovie,
+      season: widget.season,
+      episode: widget.episode,
+    );
+    if (start == null) {
+      _didSeekResume = true;
+      return;
+    }
+    _didSeekResume = true;
+    await _exoPlayer?.seekTo(start);
+    if (mounted) {
+      setState(() => _positionMs = start);
+    }
+  }
+
+  Future<void> _saveWatchProgress({bool notify = true}) async {
+    final contentId = _historyContentId;
+    final history = _watchHistory;
+    if (contentId == null || history == null) return;
+    if (_positionMs < 8000) return;
+    await history.recordProgress(
+      contentId: contentId,
+      isMovie: widget.isMovie,
+      title: widget.title,
+      seriesTitle: widget.seriesTitle,
+      posterPath: widget.posterPath ?? '',
+      backdropPath: widget.backdropPath ?? '',
+      tmdbId: widget.tmdbId,
+      xtreamSeriesId: widget.xtreamSeriesId,
+      streamUrl: (widget.customUrl != null &&
+              !widget.customUrl!.startsWith('file:'))
+          ? widget.customUrl
+          : null,
+      season: widget.season,
+      episode: widget.episode,
+      episodeTitle: widget.isMovie ? null : widget.title,
+      positionMs: _positionMs,
+      durationMs: _durationMs,
+      releaseYear: widget.releaseYear,
+      notify: notify,
+    );
+  }
+
   void _togglePlay() {
     if (_isPlaying) {
-      _nativeChannel?.invokeMethod('pause');
+      _exoPlayer?.pause();
     } else {
-      _nativeChannel?.invokeMethod('resume');
+      _exoPlayer?.resume();
     }
     setState(() => _isPlaying = !_isPlaying);
   }
 
   void _seek(double value) {
-    _nativeChannel?.invokeMethod('seekTo', {'position': value.toInt()});
+    _exoPlayer?.seekTo(value.toInt());
   }
 
   @override
   void dispose() {
+    unawaited(_saveWatchProgress());
+    WidgetsBinding.instance.removeObserver(this);
     WakelockPlus.disable();
     _hideTimer?.cancel();
     _positionTimer?.cancel();
     _serverTimeoutTimer?.cancel();
-    _nativeChannel?.invokeMethod('dispose');
+    _exoPlayer?.dispose();
     
     _mainUIFocusNode.dispose();
     _settingsFocusNode.dispose();
@@ -544,16 +662,17 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen> {
     _sliderFocusNode.dispose();
     
     if (PlatformDetector.isTV) {
-      SystemChrome.setPreferredOrientations([
+      SystemChrome.setPreferredOrientations(const [
         DeviceOrientation.landscapeLeft,
         DeviceOrientation.landscapeRight,
       ]);
     } else {
-      SystemChrome.setPreferredOrientations([
+      SystemChrome.setPreferredOrientations(const [
         DeviceOrientation.portraitUp,
         DeviceOrientation.portraitDown,
       ]);
     }
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     super.dispose();
   }
 
@@ -562,7 +681,7 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen> {
     setState(() => _isExiting = true);
     
     final wasPlaying = _isPlaying;
-    if (_isPlaying) _nativeChannel?.invokeMethod('pause');
+    if (_isPlaying) _exoPlayer?.pause();
 
     final result = await showDialog<bool>(
       context: context,
@@ -593,7 +712,7 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen> {
     if (result == true) {
       if (mounted) Navigator.pop(context);
     } else {
-      if (wasPlaying) _nativeChannel?.invokeMethod('resume');
+      if (wasPlaying) _exoPlayer?.resume();
       // CRITICAL: Restore focus to player UI if user stayed
       _mainUIFocusNode.requestFocus();
     }
@@ -617,7 +736,7 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen> {
       body: Stack(
         children: [
           if (!_isLoading && _videoUrl != null)
-            _buildOverriddenPlayer(),
+            _buildTexturePlayer(),
           if (_isLoading)
             Center(
               child: Column(
@@ -674,12 +793,10 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen> {
 
 
   void _openSettings() {
-    _nativeChannel?.invokeMethod('pause');
+    _exoPlayer?.pause();
     setState(() {
       _tempSize = _subtitleSize;
       _tempBg = _subtitleBgOpacity;
-      _tempDecoder = _decoderMode;
-      _tempSurface = _surfaceType;
       _showSettings = true;
       _showControls = true;
       _isPlaying = false;
@@ -691,7 +808,7 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen> {
   }
 
   void _closeSettings() {
-    _nativeChannel?.invokeMethod('resume');
+    _exoPlayer?.resume();
     setState(() {
       _showSettings = false;
       _isPlaying = true;
@@ -701,28 +818,20 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen> {
   }
 
   void _applySettings() {
-    final oldDecoder = _decoderMode;
-    final oldSurface = _surfaceType;
     setState(() {
       _subtitleSize = _tempSize;
       _subtitleBgOpacity = _tempBg;
-      _decoderMode = _tempDecoder;
-      _surfaceType = _tempSurface;
       _showSettings = false;
       _isPlaying = true;
     });
     _saveSettings();
-    if (oldDecoder != _decoderMode || oldSurface != _surfaceType) {
-      _startPlaybackSequence();
-    } else {
-      _nativeChannel?.invokeMethod('resume');
-    }
+    _exoPlayer?.resume();
     _mainUIFocusNode.requestFocus();
     _startHideTimer();
   }
 
   void _openSyncSettings() {
-    _nativeChannel?.invokeMethod('pause');
+    _exoPlayer?.pause();
     setState(() {
       _tempDelay = _subtitleDelay;
       _tempAspectRatioIndex = _aspectRatioIndex;
@@ -737,7 +846,7 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen> {
   }
 
   void _closeSyncSettings() {
-    _nativeChannel?.invokeMethod('resume');
+    _exoPlayer?.resume();
     setState(() {
       _showSyncSettings = false;
       _isPlaying = true;
@@ -747,10 +856,8 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen> {
   }
 
   void _applySyncSettings() {
-    _nativeChannel?.invokeMethod('resume');
-    _nativeChannel?.invokeMethod('setAspectRatio', {
-      'ratio': _aspectValues[_tempAspectRatioIndex],
-    });
+    _exoPlayer?.resume();
+    _exoPlayer?.applyAspectRatio(modeIndex: _tempAspectRatioIndex);
     setState(() {
       _subtitleDelay = _tempDelay;
       _aspectRatioIndex = _tempAspectRatioIndex;
@@ -899,22 +1006,6 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen> {
                         value: _bgLabels[_bgValues.indexOf(_tempBg).clamp(0, 3)],
                         onLeft: () { int i = _bgValues.indexOf(_tempBg); if (i > 0) setState(() => _tempBg = _bgValues[i - 1]); },
                         onRight: () { int i = _bgValues.indexOf(_tempBg); if (i < _bgValues.length - 1) setState(() => _tempBg = _bgValues[i + 1]); },
-                        onBack: _closeSettings,
-                      ),
-                      _buildSettingRow(
-                        icon: Icons.memory,
-                        label: 'Decoder',
-                        value: _decoderLabels[_decoderValues.indexOf(_tempDecoder).clamp(0, 1)],
-                        onLeft: () { int i = _decoderValues.indexOf(_tempDecoder); if (i > 0) setState(() => _tempDecoder = _decoderValues[i - 1]); },
-                        onRight: () { int i = _decoderValues.indexOf(_tempDecoder); if (i < _decoderValues.length - 1) setState(() => _tempDecoder = _decoderValues[i + 1]); },
-                        onBack: _closeSettings,
-                      ),
-                      _buildSettingRow(
-                        icon: Icons.layers,
-                        label: 'Surface',
-                        value: _surfaceLabels[_surfaceValues.indexOf(_tempSurface).clamp(0, 1)],
-                        onLeft: () { int i = _surfaceValues.indexOf(_tempSurface); if (i > 0) setState(() => _tempSurface = _surfaceValues[i - 1]); },
-                        onRight: () { int i = _surfaceValues.indexOf(_tempSurface); if (i < _surfaceValues.length - 1) setState(() => _tempSurface = _surfaceValues[i + 1]); },
                         onBack: _closeSettings,
                       ),
                       Container(height: 1, margin: const EdgeInsets.symmetric(horizontal: 20), color: Colors.white.withValues(alpha: 0.06)),
@@ -1156,37 +1247,24 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen> {
     );
   }
 
-  Widget _buildOverriddenPlayer() {
-    final Widget player = AndroidView(
-      key: ValueKey('player_${_decoderMode}_${_surfaceType}_${_aspectRatioIndex}'),
-      viewType: 'exoplayer-view',
-      creationParams: {
-        "url": _videoUrl,
-        "subtitleUrl": null,
-        "decoderMode": _decoderMode,
-        "surfaceType": _surfaceType,
-        "aspectRatio": _aspectValues[_aspectRatioIndex],
-      },
-      creationParamsCodec: const StandardMessageCodec(),
-      onPlatformViewCreated: _onPlatformViewCreated,
-    );
-
+  Widget _buildTexturePlayer() {
+    final player = (_exoPlayer ??= IptvExoPlayerController()).buildView();
     switch (_aspectRatioIndex) {
-      case 1: // 16:9
-        return Positioned.fill(child: Center(child: AspectRatio(aspectRatio: 16/9, child: player)));
-      case 2: // 4:3
-        return Positioned.fill(child: Center(child: AspectRatio(aspectRatio: 4/3, child: player)));
-      case 3: // Stretch/Fill
-        // To force stretch when native is FIT, we sometimes need to slightly overflow
-        return Positioned.fill(child: player); 
-      case 4: // Zoom
+      case 1:
         return Positioned.fill(
-          child: Transform.scale(
-            scale: 1.2, // Zoom in to fill black bars
-            child: player,
-          ),
+          child: Center(child: AspectRatio(aspectRatio: 16 / 9, child: player)),
         );
-      default: // Auto/Fit
+      case 2:
+        return Positioned.fill(
+          child: Center(child: AspectRatio(aspectRatio: 4 / 3, child: player)),
+        );
+      case 3:
+        return Positioned.fill(child: player);
+      case 4:
+        return Positioned.fill(
+          child: Transform.scale(scale: 1.2, child: player),
+        );
+      default:
         return Positioned.fill(child: player);
     }
   }

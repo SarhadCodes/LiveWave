@@ -11,8 +11,12 @@ import 'media_custom_player_screen.dart';
 import 'package:provider/provider.dart';
 import '../providers/settings_provider.dart';
 import '../providers/favorites_provider.dart';
+import '../providers/watch_history_provider.dart';
 import '../services/download_service.dart';
 import '../l10n/app_localizations.dart';
+import '../models/cast_member.dart';
+import '../widgets/cast_section.dart';
+import 'person_detail_screen.dart';
 
 class TvShowDetailScreen extends StatefulWidget {
   final TvShow tvShow;
@@ -34,7 +38,10 @@ class _TvShowDetailScreenState extends State<TvShowDetailScreen> {
   int _selectedSeason = 1;
   List<dynamic> _seasonsData = [];
   List<dynamic> _episodesData = [];
-  Map<int, Map<int, String>> _xtreamEpisodeUrls = {};
+  Map<int, Map<int, XtreamEpisodeInfo>> _xtreamEpisodes = {};
+  List<CastMember> _cast = const [];
+  bool _isLoadingCast = false;
+  String? _loadError;
 
   final FocusNode _backButtonFocus = FocusNode(debugLabel: 'backButton');
   final FocusNode _trailerFocus = FocusNode(debugLabel: 'trailer');
@@ -70,7 +77,14 @@ class _TvShowDetailScreenState extends State<TvShowDetailScreen> {
             _isLoadingDetails = false;
           });
           _loadSeasonEpisodes(_selectedSeason);
+          _loadCast();
         }
+      } else if (mounted) {
+        setState(() {
+          _isLoadingDetails = false;
+          _isLoadingTrailer = false;
+        });
+        _loadCast();
       }
       
       final videos = await _tmdbService.getTvShowVideos(widget.tvShow.id);
@@ -87,15 +101,37 @@ class _TvShowDetailScreenState extends State<TvShowDetailScreen> {
     }
   }
 
+  Future<void> _loadCast() async {
+    if (widget.tvShow.isXtream || widget.tvShow.id <= 0) return;
+    if (mounted) setState(() => _isLoadingCast = true);
+    final cast = await _tmdbService.getCast(isMovie: false, id: widget.tvShow.id);
+    if (mounted) setState(() { _cast = cast; _isLoadingCast = false; });
+  }
+
+  void _openPerson(CastMember member) {
+    if (member.id <= 0) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PersonDetailScreen(
+          personId: member.id,
+          name: member.name,
+          profilePath: member.profilePath,
+        ),
+      ),
+    );
+  }
+
   Future<void> _loadXtreamDetails() async {
     try {
       final episodes = await _xtreamService.getSeriesEpisodes(widget.tvShow.xtreamSeriesId!);
       if (!mounted) return;
 
       final seasons = episodes.keys.toList()..sort();
-      _xtreamEpisodeUrls = episodes;
+      _xtreamEpisodes = episodes;
 
       setState(() {
+        _loadError = seasons.isEmpty ? 'No episodes found for this series' : null;
         _seasonsData = seasons
             .map((s) => {'season_number': s, 'name': 'Season $s'})
             .toList();
@@ -110,6 +146,7 @@ class _TvShowDetailScreenState extends State<TvShowDetailScreen> {
     } catch (e) {
       if (mounted) {
         setState(() {
+          _loadError = e.toString().replaceFirst('Exception: ', '');
           _isLoadingDetails = false;
           _isLoadingTrailer = false;
         });
@@ -118,7 +155,7 @@ class _TvShowDetailScreenState extends State<TvShowDetailScreen> {
   }
 
   void _loadXtreamSeasonEpisodes(int seasonNumber) {
-    final seasonEpisodes = _xtreamEpisodeUrls[seasonNumber] ?? {};
+    final seasonEpisodes = _xtreamEpisodes[seasonNumber] ?? {};
     final episodeNumbers = seasonEpisodes.keys.toList()..sort();
 
     setState(() {
@@ -127,7 +164,7 @@ class _TvShowDetailScreenState extends State<TvShowDetailScreen> {
       _episodesData = episodeNumbers
           .map((num) => {
                 'episode_number': num,
-                'name': 'Episode $num',
+                'name': seasonEpisodes[num]?.title ?? 'Episode $num',
               })
           .toList();
     });
@@ -160,12 +197,13 @@ class _TvShowDetailScreenState extends State<TvShowDetailScreen> {
     final downloadId = downloadService.generateId(widget.tvShow.id, false, season: season, episode: episode);
     final download = downloadService.getDownload(downloadId);
     final isDownloaded = download?.status == DownloadStatus.completed;
-    final xtreamUrl = _xtreamEpisodeUrls[season]?[episode];
+    final xtreamUrl = _xtreamEpisodes[season]?[episode]?.url;
 
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => MediaCustomPlayerScreen(
+          contentId: widget.tvShow.id,
           tmdbId: widget.tvShow.isXtream ? null : widget.tvShow.id,
           isMovie: false,
           season: season,
@@ -173,6 +211,9 @@ class _TvShowDetailScreenState extends State<TvShowDetailScreen> {
           title: '${widget.tvShow.name} - $epTitle',
           seriesTitle: widget.tvShow.name,
           releaseYear: int.tryParse(widget.tvShow.year),
+          posterPath: widget.tvShow.posterPath,
+          backdropPath: widget.tvShow.backdropPath,
+          xtreamSeriesId: widget.tvShow.xtreamSeriesId,
           customUrl: xtreamUrl ?? (isDownloaded ? 'file://${download!.localVideoPath}' : null),
           customSubtitleUrl: isDownloaded && download!.localSubtitlePath != null ? 'file://${download.localSubtitlePath}' : null,
         ),
@@ -208,6 +249,7 @@ class _TvShowDetailScreenState extends State<TvShowDetailScreen> {
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
+        clipBehavior: Clip.hardEdge,
         children: [
           // 1. Immersive Backdrop with gradient
           _buildBackdrop(),
@@ -230,7 +272,14 @@ class _TvShowDetailScreenState extends State<TvShowDetailScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         _buildMainInfo(l10n, isTV),
-                        const SizedBox(height: 40),
+                        const SizedBox(height: 32),
+                        CastSection(
+                          cast: _cast,
+                          isLoading: _isLoadingCast,
+                          isTV: isTV,
+                          onPersonTap: _openPerson,
+                        ),
+                        if (_cast.isNotEmpty || _isLoadingCast) const SizedBox(height: 32),
                         _buildSeasonSection(l10n, isTV),
                         const SizedBox(height: 30),
                         _buildEpisodesSection(l10n, isTV),
@@ -387,17 +436,27 @@ class _TvShowDetailScreenState extends State<TvShowDetailScreen> {
   }
 
   Widget _buildActionButtons(AppLocalizations l10n) {
-    return Wrap(
+    return Consumer<WatchHistoryProvider>(
+      builder: (context, history, _) {
+        final saved = history.itemFor(widget.tvShow.id, isMovie: false);
+        final canResume = saved != null;
+        return Wrap(
       spacing: 16,
       runSpacing: 16,
       children: [
         SizedBox(
           width: double.infinity,
           child: _buildPremiumAction(
-            label: l10n.translate('watch_now'),
+            label: l10n.translate(canResume ? 'resume' : 'watch_now'),
             icon: Icons.play_arrow_rounded,
             focusNode: _watchNowFocus,
             onPressed: () {
+              if (saved != null) {
+                final season = saved.season ?? _selectedSeason;
+                final episode = saved.episode ?? 1;
+                _playEpisode(season, episode, saved.episodeTitle ?? 'S$season:E$episode');
+                return;
+              }
               if (_episodesData.isNotEmpty) {
                 final ep = _episodesData.first;
                 _playEpisode(_selectedSeason, ep['episode_number'] ?? 1, 'S$_selectedSeason:E${ep['episode_number']}');
@@ -415,6 +474,8 @@ class _TvShowDetailScreenState extends State<TvShowDetailScreen> {
         ),
         _buildFavoriteAction(),
       ],
+        );
+      },
     );
   }
 
@@ -568,8 +629,17 @@ class _TvShowDetailScreenState extends State<TvShowDetailScreen> {
   }
 
   Widget _buildEpisodesSection(AppLocalizations l10n, bool isTV) {
-    if (_isLoadingEpisodes) {
+    if (_isLoadingEpisodes || _isLoadingDetails) {
       return const Center(child: CircularProgressIndicator(color: AppTheme.primaryColor));
+    }
+    if (_episodesData.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 24),
+        child: Text(
+          _loadError ?? l10n.translate('no_episodes'),
+          style: const TextStyle(color: Colors.white54, fontSize: 14),
+        ),
+      );
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -583,11 +653,12 @@ class _TvShowDetailScreenState extends State<TvShowDetailScreen> {
           GridView.builder(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
+            clipBehavior: Clip.hardEdge,
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: 3,
-              childAspectRatio: 0.85, // Taller cards to prevent vertical overflow
-              crossAxisSpacing: 20,
-              mainAxisSpacing: 20,
+              childAspectRatio: 1.55,
+              crossAxisSpacing: 16,
+              mainAxisSpacing: 16,
             ),
             itemCount: _episodesData.length,
             itemBuilder: (context, index) => _buildEpisodeTile(_episodesData[index], true),
@@ -608,6 +679,7 @@ class _TvShowDetailScreenState extends State<TvShowDetailScreen> {
     final num = ep['episode_number'] ?? 0;
     final name = ep['name'] ?? '';
     final still = ep['still_path'];
+    final stillUrl = TmdbService.getImageUrl(still, size: 'w300');
     
     return Consumer<DownloadService>(
       builder: (context, downloadService, _) {
@@ -664,87 +736,90 @@ class _TvShowDetailScreenState extends State<TvShowDetailScreen> {
             final isFocused = Focus.of(context).hasFocus;
             return GestureDetector(
               onTap: () => _playEpisode(_selectedSeason, num, 'S$_selectedSeason:E$num $name'),
-              child: AnimatedContainer(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
                 decoration: BoxDecoration(
-                  color: isFocused ? Colors.white.withOpacity(0.1) : Colors.transparent,
+                  color: isFocused ? Colors.white.withOpacity(0.1) : Colors.black,
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: isFocused ? Colors.white : Colors.white10, width: isFocused ? 2 : 1),
                 ),
                 child: isTV 
                   ? Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Stack(
-                          children: [
-                            ClipRRect(
-                              borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
-                              child: TmdbService.getImageUrl(still, size: 'w300').isNotEmpty
-                                  ? CachedNetworkImage(
-                                      imageUrl: TmdbService.getImageUrl(still, size: 'w300'),
-                                      width: double.infinity,
-                                      height: 120,
-                                      fit: BoxFit.cover,
-                                    )
-                                  : Container(width: double.infinity, height: 120, color: Colors.white10),
-                            ),
-                            Positioned(
-                              top: 4, right: 4,
-                              child: Container(
-                                decoration: BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
-                                child: downloadButton,
-                              ),
-                            ),
-                            if (isFocused)
-                              Positioned.fill(
-                                child: Container(
-                                  color: Colors.black45,
-                                  child: const Center(child: Icon(Icons.play_circle_filled, color: Colors.white, size: 40)),
-                                ),
-                              ),
-                          ],
-                        ),
                         Expanded(
-                          child: Padding(
-                            padding: const EdgeInsets.all(12),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'E$num. $name',
-                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
+                          child: Stack(
+                            fit: StackFit.expand,
+                            clipBehavior: Clip.hardEdge,
+                            children: [
+                              stillUrl.isNotEmpty
+                                  ? CachedNetworkImage(
+                                      imageUrl: stillUrl,
+                                      fit: BoxFit.cover,
+                                      width: double.infinity,
+                                      height: double.infinity,
+                                      alignment: Alignment.center,
+                                      memCacheWidth: 480,
+                                      errorWidget: (_, __, ___) => Container(color: Colors.white10),
+                                    )
+                                  : Container(color: Colors.white10),
+                              Positioned(
+                                top: 4, right: 4,
+                                child: Container(
+                                  decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
+                                  child: downloadButton,
                                 ),
-                              ],
-                            ),
+                              ),
+                              if (isFocused)
+                                const ColoredBox(
+                                  color: Colors.black45,
+                                  child: Center(child: Icon(Icons.play_circle_filled, color: Colors.white, size: 40)),
+                                ),
+                            ],
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+                          child: Text(
+                            'E$num. $name',
+                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                       ],
                     )
                   : Row(
                       children: [
-                        Stack(
-                          children: [
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(8),
-                              child: TmdbService.getImageUrl(still, size: 'w300').isNotEmpty
-                                  ? CachedNetworkImage(
-                                      imageUrl: TmdbService.getImageUrl(still, size: 'w300'),
-                                      width: 120,
-                                      height: 80,
-                                      fit: BoxFit.cover,
-                                    )
-                                  : Container(width: 120, height: 80, color: Colors.white10),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: SizedBox(
+                            width: 120,
+                            height: 80,
+                            child: Stack(
+                              fit: StackFit.expand,
+                              clipBehavior: Clip.hardEdge,
+                              children: [
+                                stillUrl.isNotEmpty
+                                    ? CachedNetworkImage(
+                                        imageUrl: stillUrl,
+                                        width: 120,
+                                        height: 80,
+                                        fit: BoxFit.cover,
+                                        memCacheWidth: 240,
+                                        errorWidget: (context, url, error) => Container(color: Colors.white10),
+                                      )
+                                    : Container(color: Colors.white10),
+                                if (isFocused)
+                                  const ColoredBox(
+                                    color: Colors.black45,
+                                    child: Center(child: Icon(Icons.play_circle_filled, color: Colors.white, size: 40)),
+                                  ),
+                              ],
                             ),
-                            if (isFocused)
-                              Positioned.fill(
-                                child: Container(
-                                  color: Colors.black45,
-                                  child: const Center(child: Icon(Icons.play_circle_filled, color: Colors.white, size: 40)),
-                                ),
-                              ),
-                          ],
+                          ),
                         ),
                         const SizedBox(width: 16),
                         Expanded(
@@ -765,6 +840,7 @@ class _TvShowDetailScreenState extends State<TvShowDetailScreen> {
                         const SizedBox(width: 8),
                       ],
                     ),
+              ),
               ),
             );
           }),

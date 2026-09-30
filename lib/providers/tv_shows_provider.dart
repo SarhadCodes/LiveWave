@@ -23,6 +23,21 @@ class TvShowsProvider extends ChangeNotifier {
   final Map<String, List<TvShow>> _showsByCategory = {};
   List<String> _categories = [];
 
+  /// Trial preview is disabled; full series catalog is always shown.
+  bool _previewLimited = false;
+
+  bool get previewLimited => _previewLimited;
+
+  void setPreviewLimited(bool limited) {
+    if (!_previewLimited) return;
+    _previewLimited = false;
+    notifyListeners();
+  }
+
+  void _applyPreviewCap() {
+    // Trial preview is disabled so every series category stays visible.
+  }
+
   TvShowsStatus get status => _status;
   String? get errorMessage => _errorMessage;
 
@@ -56,6 +71,7 @@ class TvShowsProvider extends ChangeNotifier {
       } else {
         await _fetchFromTmdb();
       }
+      _applyPreviewCap();
       _status = TvShowsStatus.success;
     } catch (e) {
       debugPrint('[TvShowsProvider] Error fetching TV shows: $e');
@@ -91,27 +107,38 @@ class TvShowsProvider extends ChangeNotifier {
   Future<void> _fetchFromTmdb() async {
     _showsByCategory.clear();
     _categories = [];
-    final futures = await Future.wait([
-      _tmdbService.getTrendingTvShows(),
+
+    // Phase 1: hero row first so the screen can paint within a few seconds.
+    final trendingFuture = _tmdbService.getTrendingTvShows();
+    final restFuture = Future.wait([
       _tmdbService.getPopularTvShows(),
       _tmdbService.getTopRatedTvShows(),
       _tmdbService.getOnTheAirTvShows(),
       _tmdbService.getAnimeTvShows(),
     ]);
+    final kurdishFuture = _tmdbService.getListItems('8649243').catchError((e) {
+      debugPrint('[TvShowsProvider] Error loading Kurdish list: $e');
+      return {'movies': <dynamic>[], 'tvShows': <TvShow>[]};
+    });
 
-    _trendingTvShows = futures[0];
-    _popularTvShows = futures[1];
-    _topRatedTvShows = futures[2];
-    _onTheAirTvShows = futures[3];
-    _animeTvShows = futures[4];
+    _trendingTvShows = await trendingFuture;
+    _applyPreviewCap();
+    notifyListeners();
+
+    final rest = await restFuture;
+    _popularTvShows = rest[0];
+    _topRatedTvShows = rest[1];
+    _onTheAirTvShows = rest[2];
+    _animeTvShows = rest[3];
 
     try {
-      final listData = await _tmdbService.getListItems('8649243');
+      final listData = await kurdishFuture;
       _kurdishTvShows = listData['tvShows'] as List<TvShow>;
     } catch (e) {
       debugPrint('[TvShowsProvider] Error loading Kurdish list: $e');
       _kurdishTvShows = [];
     }
+    _applyPreviewCap();
   }
 
   void reset() {

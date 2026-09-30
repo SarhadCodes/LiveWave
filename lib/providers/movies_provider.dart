@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import '../models/movie.dart';
+import '../services/telegram_ingest_service.dart';
 import '../services/tmdb_service.dart';
 import '../services/xtream_service.dart';
 import 'settings_provider.dart';
@@ -22,6 +23,21 @@ class MoviesProvider extends ChangeNotifier {
   List<Movie> _animeMovies = [];
   final Map<String, List<Movie>> _moviesByCategory = {};
   List<String> _categories = [];
+
+  /// Trial preview is disabled; full movie catalog is always shown.
+  bool _previewLimited = false;
+
+  bool get previewLimited => _previewLimited;
+
+  void setPreviewLimited(bool limited) {
+    if (!_previewLimited) return;
+    _previewLimited = false;
+    notifyListeners();
+  }
+
+  void _applyPreviewCap() {
+    // Trial preview is disabled so every movie category stays visible.
+  }
 
   MoviesStatus get status => _status;
   String? get errorMessage => _errorMessage;
@@ -56,6 +72,8 @@ class MoviesProvider extends ChangeNotifier {
       } else {
         await _fetchFromTmdb();
       }
+      await _mergeTelegramMovies();
+      _applyPreviewCap();
       _status = MoviesStatus.success;
     } catch (e) {
       debugPrint('[MoviesProvider] Error fetching movies: $e');
@@ -91,26 +109,49 @@ class MoviesProvider extends ChangeNotifier {
   Future<void> _fetchFromTmdb() async {
     _moviesByCategory.clear();
     _categories = [];
-    final futures = await Future.wait([
-      _tmdbService.getTrendingMovies(),
+
+    // Phase 1: hero row first so the screen can paint within a few seconds.
+    final trendingFuture = _tmdbService.getTrendingMovies();
+    final restFuture = Future.wait([
       _tmdbService.getPopularMovies(),
       _tmdbService.getTopRatedMovies(),
       _tmdbService.getNowPlayingMovies(),
       _tmdbService.getAnimeMovies(),
     ]);
+    final kurdishFuture = _tmdbService.getListItems('8649243').catchError((e) {
+      debugPrint('[MoviesProvider] Error loading Kurdish list: $e');
+      return {'movies': <Movie>[], 'tvShows': <dynamic>[]};
+    });
 
-    _trendingMovies = futures[0] as List<Movie>;
-    _popularMovies = futures[1] as List<Movie>;
-    _topRatedMovies = futures[2] as List<Movie>;
-    _nowPlayingMovies = futures[3] as List<Movie>;
-    _animeMovies = futures[4] as List<Movie>;
+    _trendingMovies = await trendingFuture;
+    _applyPreviewCap();
+    notifyListeners();
+
+    final rest = await restFuture;
+    _popularMovies = rest[0];
+    _topRatedMovies = rest[1];
+    _nowPlayingMovies = rest[2];
+    _animeMovies = rest[3];
 
     try {
-      final listData = await _tmdbService.getListItems('8649243');
+      final listData = await kurdishFuture;
       _kurdishMovies = listData['movies'] as List<Movie>;
     } catch (e) {
       debugPrint('[MoviesProvider] Error loading Kurdish list: $e');
       _kurdishMovies = [];
+    }
+    _applyPreviewCap();
+  }
+
+  Future<void> _mergeTelegramMovies() async {
+    final telegram = await TelegramIngestService.fetchPublished();
+    if (telegram.isEmpty) return;
+    if (_contentSource == SettingsProvider.contentSourceXtream) {
+      _moviesByCategory.putIfAbsent('WAVE', () => []);
+      _moviesByCategory['WAVE'] = [...telegram, ..._moviesByCategory['WAVE']!];
+      if (!_categories.contains('WAVE')) _categories.insert(0, 'WAVE');
+    } else {
+      _kurdishMovies = [...telegram, ..._kurdishMovies];
     }
   }
 

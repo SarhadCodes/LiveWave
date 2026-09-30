@@ -23,6 +23,21 @@ class ChannelsProvider extends ChangeNotifier {
   final Map<String, List<Channel>> _groupedChannels = {};
   List<String> _categoryList = [];
 
+  /// Trial preview is disabled; full live-TV catalog is always shown.
+  bool _previewLimited = false;
+
+  bool get previewLimited => _previewLimited;
+
+  void setPreviewLimited(bool limited) {
+    if (!_previewLimited) return;
+    _previewLimited = false;
+    notifyListeners();
+  }
+
+  void _applyPreviewCap() {
+    // Trial preview is disabled so every live-TV category stays visible.
+  }
+
   ChannelsStatus get status => _status;
   List<Channel> get channels => _channels;
   String? get errorMessage => _errorMessage;
@@ -155,6 +170,19 @@ class ChannelsProvider extends ChangeNotifier {
     await _saveFavorites();
   }
 
+  /// Remove all favorite channels (e.g. when activation expires).
+  Future<void> clearFavorites() async {
+    _favoriteChannelIds.clear();
+    _updateGroups();
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_favoritesKey);
+    } catch (e) {
+      debugPrint('Error clearing channel favorites: $e');
+    }
+  }
+
   // Fetch channels from Firestore
   Future<void> fetchChannels({bool force = false}) async {
     if (!force && _status == ChannelsStatus.loading) return;
@@ -170,6 +198,7 @@ class ChannelsProvider extends ChangeNotifier {
       } else {
         _channels = await _firestoreService.getActiveChannels();
       }
+      _applyPreviewCap();
       _updateGroups();
       _status = ChannelsStatus.success;
     } catch (e) {
@@ -192,6 +221,7 @@ class ChannelsProvider extends ChangeNotifier {
     _firestoreService.getActiveChannelsStream().listen(
       (channels) {
         _channels = channels;
+        _applyPreviewCap();
         _updateGroups();
         _status = ChannelsStatus.success;
         _errorMessage = null;

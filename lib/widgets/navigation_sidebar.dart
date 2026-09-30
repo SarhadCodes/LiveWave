@@ -1,8 +1,11 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../config/app_nav.dart';
 import '../config/app_theme.dart';
 import '../providers/settings_provider.dart';
+import '../widgets/tv_navigation_scope.dart';
+import 'nav_bar_icon.dart';
 import 'package:provider/provider.dart';
 
 class NavigationSidebar extends StatefulWidget {
@@ -21,7 +24,7 @@ class NavigationSidebar extends StatefulWidget {
 
 class NavigationSidebarState extends State<NavigationSidebar>
     with TickerProviderStateMixin {
-  final List<FocusNode> _focusNodes = List.generate(6, (_) => FocusNode());
+  final List<FocusNode> _focusNodes = List.generate(AppNavIndex.count, (_) => FocusNode());
   late AnimationController _glowController;
 
   /// Focus a sidebar item — used to auto-focus Home on TV app open.
@@ -29,6 +32,8 @@ class NavigationSidebarState extends State<NavigationSidebar>
     if (index < 0 || index >= _focusNodes.length) return;
     _focusNodes[index].requestFocus();
   }
+
+  bool get hasFocus => _focusNodes.any((node) => node.hasFocus);
 
   @override
   void initState() {
@@ -53,11 +58,12 @@ class NavigationSidebarState extends State<NavigationSidebar>
   }
 
   static const List<_NavItemData> _items = [
-    _NavItemData(Icons.explore_rounded, 'Discover'),
-    _NavItemData(Icons.sensors_rounded, 'Live'),
-    _NavItemData(Icons.movie_filter_rounded, 'Movies'),
-    _NavItemData(Icons.slideshow_rounded, 'Shows'),
-    _NavItemData(Icons.manage_search_rounded, 'Search'),
+    _NavItemData(assetPath: NavBarAssets.home, label: 'Discover'),
+    _NavItemData(icon: Icons.sensors_rounded, label: 'Live'),
+    _NavItemData(icon: Icons.movie_filter_rounded, label: 'Movies'),
+    _NavItemData(assetPath: NavBarAssets.tvShow, label: 'Shows'),
+    _NavItemData(icon: Icons.graphic_eq_rounded, label: 'Wave'),
+    _NavItemData(assetPath: NavBarAssets.search, label: 'Search'),
   ];
 
   @override
@@ -102,6 +108,7 @@ class NavigationSidebarState extends State<NavigationSidebar>
                         return Padding(
                           padding: const EdgeInsets.symmetric(vertical: 4),
                           child: _buildNavItem(
+                            assetPath: _items[i].assetPath,
                             icon: _items[i].icon,
                             label: _items[i].label,
                             index: i,
@@ -133,10 +140,10 @@ class NavigationSidebarState extends State<NavigationSidebar>
 
               // Settings at bottom
               _buildNavItem(
-                icon: Icons.tune_rounded,
+                assetPath: NavBarAssets.settings,
                 label: 'Settings',
-                index: 5,
-                focusNode: _focusNodes[5],
+                index: AppNavIndex.settings,
+                focusNode: _focusNodes[AppNavIndex.settings],
               ),
 
               const SizedBox(height: 20),
@@ -148,7 +155,8 @@ class NavigationSidebarState extends State<NavigationSidebar>
   }
 
   Widget _buildNavItem({
-    required IconData icon,
+    String? assetPath,
+    IconData? icon,
     required String label,
     required int index,
     required FocusNode focusNode,
@@ -169,24 +177,38 @@ class NavigationSidebarState extends State<NavigationSidebar>
           if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
             if (isRtl) {
               return KeyEventResult.handled;
-            } else {
-              return KeyEventResult.ignored;
             }
+            if (widget.selectedIndex == AppNavIndex.search ||
+                widget.selectedIndex == AppNavIndex.wave) {
+              final tvNav = TvNavigationScope.maybeOf(context);
+              if (tvNav?.isTvLayout == true) {
+                tvNav!.focusPrimaryContent?.call();
+                return KeyEventResult.handled;
+              }
+            }
+            return KeyEventResult.ignored;
           }
           if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
             if (isRtl) {
+              if (widget.selectedIndex == AppNavIndex.search ||
+                  widget.selectedIndex == AppNavIndex.wave) {
+                final tvNav = TvNavigationScope.maybeOf(context);
+                if (tvNav?.isTvLayout == true) {
+                  tvNav!.focusPrimaryContent?.call();
+                  return KeyEventResult.handled;
+                }
+              }
               return KeyEventResult.ignored;
-            } else {
-              return KeyEventResult.handled;
             }
+            return KeyEventResult.handled;
           }
           if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
-            final prevIndex = index > 0 ? index - 1 : 5;
+            final prevIndex = index > 0 ? index - 1 : AppNavIndex.settings;
             _focusNodes[prevIndex].requestFocus();
             return KeyEventResult.handled;
           }
           if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
-            final nextIndex = index < 5 ? index + 1 : 0;
+            final nextIndex = index < AppNavIndex.settings ? index + 1 : 0;
             _focusNodes[nextIndex].requestFocus();
             return KeyEventResult.handled;
           }
@@ -213,13 +235,12 @@ class NavigationSidebarState extends State<NavigationSidebar>
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(
-                    icon,
-                    color: isSelected
-                        ? Colors.white
-                        : isFocused
-                            ? Colors.white.withOpacity(0.9)
-                            : Colors.white.withOpacity(0.35),
+                  NavBarIcon(
+                    assetPath: assetPath,
+                    icon: icon,
+                    isSelected: isSelected,
+                    isFocused: isFocused,
+                    selectedColor: Colors.white,
                     size: 22,
                   ),
                   const SizedBox(height: 3),
@@ -269,7 +290,12 @@ class NavigationSidebarState extends State<NavigationSidebar>
 }
 
 class _NavItemData {
-  final IconData icon;
+  final String? assetPath;
+  final IconData? icon;
   final String label;
-  const _NavItemData(this.icon, this.label);
+  const _NavItemData({
+    this.assetPath,
+    this.icon,
+    required this.label,
+  });
 }

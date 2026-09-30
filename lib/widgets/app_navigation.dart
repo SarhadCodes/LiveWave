@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../config/app_nav.dart';
 import '../config/app_theme.dart';
 import '../widgets/navigation_sidebar.dart';
 import '../widgets/app_header.dart';
@@ -10,14 +11,19 @@ import '../screens/settings_screen.dart';
 import '../screens/downloads_screen.dart';
 import '../screens/movies_screen.dart';
 import '../screens/tv_shows_screen.dart';
+import '../screens/wave_home_screen.dart';
 import 'package:provider/provider.dart';
 import '../providers/settings_provider.dart';
 import '../providers/activation_provider.dart';
 import '../providers/channels_provider.dart';
 import '../providers/movies_provider.dart';
 import '../providers/tv_shows_provider.dart';
+import '../providers/favorites_provider.dart';
+import '../providers/wave_provider.dart';
 import '../widgets/custom_bottom_nav.dart';
+import '../services/user_content_cleanup.dart';
 import '../l10n/app_localizations.dart';
+import '../widgets/tv_navigation_scope.dart';
 import 'dart:async';
 import '../utils/security_utils.dart';
 import '../screens/security_block_screen.dart';
@@ -35,6 +41,8 @@ class _AppNavigationState extends State<AppNavigation> with WidgetsBindingObserv
   int _selectedIndex = 0;
   Timer? _securityTimer;
   final _sidebarKey = GlobalKey<NavigationSidebarState>();
+  final _searchScreenKey = GlobalKey<SearchScreenState>();
+  final _waveScreenKey = GlobalKey<WaveHomeScreenState>();
 
   @override
   void initState() {
@@ -43,6 +51,7 @@ class _AppNavigationState extends State<AppNavigation> with WidgetsBindingObserv
     _startSecurityMonitoring();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _ensureActivationReady();
+      _preloadMediaCatalog();
       _focusSidebarOnTv();
     });
     
@@ -75,6 +84,78 @@ class _AppNavigationState extends State<AppNavigation> with WidgetsBindingObserv
     _sidebarKey.currentState?.requestFocusOnItem(_selectedIndex);
   }
 
+  void _focusPrimaryContent() {
+    if (!mounted) return;
+    if (_selectedIndex == AppNavIndex.search) {
+      _searchScreenKey.currentState?.focusSearchBar();
+    } else if (_selectedIndex == AppNavIndex.wave) {
+      _waveScreenKey.currentState?.focusPrimary();
+    }
+  }
+
+  Widget _screenForIndex(int index) {
+    switch (index) {
+      case 0:
+        return const HomeScreenNew();
+      case 1:
+        return const LiveChannelsScreen();
+      case 2:
+        return const MoviesScreen();
+      case 3:
+        return const TvShowsScreen();
+      case AppNavIndex.wave:
+        return WaveHomeScreen(key: _waveScreenKey);
+      case AppNavIndex.search:
+        return SearchScreen(key: _searchScreenKey);
+      case AppNavIndex.settings:
+        return const SettingsScreen();
+      default:
+        return const HomeScreenNew();
+    }
+  }
+
+  Future<void> _showExitDialog() async {
+    if (!mounted) return;
+    final l10n = AppLocalizations.of(context);
+    final shouldExit = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppTheme.cardColor,
+        title: Text(l10n.translate('exit'), style: const TextStyle(color: AppTheme.textPrimary)),
+        content: Text(l10n.translate('confirm_exit'), style: const TextStyle(color: AppTheme.textSecondary)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: Text(l10n.translate('cancel'), style: const TextStyle(color: AppTheme.textSecondary)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text(l10n.translate('exit'), style: const TextStyle(color: AppTheme.accentRed)),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldExit == true) SystemNavigator.pop();
+  }
+
+  void _preloadMediaCatalog() {
+    if (!mounted) return;
+    final settings = Provider.of<SettingsProvider>(context, listen: false);
+    final movies = Provider.of<MoviesProvider>(context, listen: false);
+    final tvShows = Provider.of<TvShowsProvider>(context, listen: false);
+
+    movies.setContentSource(settings.contentSource);
+    tvShows.setContentSource(settings.contentSource);
+
+    if (movies.status == MoviesStatus.initial) {
+      movies.fetchAllMovies();
+    }
+    if (tvShows.status == TvShowsStatus.initial) {
+      tvShows.fetchAllTvShows();
+    }
+  }
+
   void _lazyLoadForTab(int index) {
     if (!mounted) return;
     final settings = Provider.of<SettingsProvider>(context, listen: false);
@@ -84,10 +165,12 @@ class _AppNavigationState extends State<AppNavigation> with WidgetsBindingObserv
     movies.setContentSource(settings.contentSource);
     tvShows.setContentSource(settings.contentSource);
 
-    if (index == 2 && movies.status == MoviesStatus.initial) {
+    if (index == AppNavIndex.movies && movies.status == MoviesStatus.initial) {
       movies.fetchAllMovies();
-    } else if (index == 3 && tvShows.status == TvShowsStatus.initial) {
+    } else if (index == AppNavIndex.shows && tvShows.status == TvShowsStatus.initial) {
       tvShows.fetchAllTvShows();
+    } else if (index == AppNavIndex.wave) {
+      Provider.of<WaveProvider>(context, listen: false).loadHomeIfNeeded();
     }
   }
 
@@ -109,6 +192,15 @@ class _AppNavigationState extends State<AppNavigation> with WidgetsBindingObserv
     final activation = Provider.of<ActivationProvider>(context, listen: false);
     final previous = activation.status;
     await activation.recheck(settings);
+    if (!mounted) return;
+
+    await UserContentCleanup.onActivationStatusChange(
+      previous: previous,
+      current: activation.status,
+      channels: Provider.of<ChannelsProvider>(context, listen: false),
+      favorites: Provider.of<FavoritesProvider>(context, listen: false),
+    );
+
     if (previous != activation.status && mounted) {
       final channels = Provider.of<ChannelsProvider>(context, listen: false);
       final movies = Provider.of<MoviesProvider>(context, listen: false);
@@ -137,15 +229,26 @@ class _AppNavigationState extends State<AppNavigation> with WidgetsBindingObserv
     });
   }
 
+  String? _appliedLayoutMode;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     final settings = Provider.of<SettingsProvider>(context);
+    // A player route on top owns orientation. Also ignore MediaQuery
+    // rebuilds from the notification shade so we do not snap back to portrait.
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) return;
+    if (_appliedLayoutMode == settings.layoutMode) return;
+    _appliedLayoutMode = settings.layoutMode;
     _updateOrientation(settings.layoutMode);
   }
 
   void _updateOrientation(String layoutMode) {
     Future.microtask(() {
+      if (!mounted) return;
+      final route = ModalRoute.of(context);
+      if (route != null && !route.isCurrent) return;
       if (layoutMode == 'tv') {
         SystemChrome.setPreferredOrientations([
           DeviceOrientation.landscapeLeft,
@@ -160,15 +263,6 @@ class _AppNavigationState extends State<AppNavigation> with WidgetsBindingObserv
     });
   }
 
-  final List<Widget> _screens = [
-    const HomeScreenNew(),
-    const LiveChannelsScreen(),
-    const MoviesScreen(),
-    const TvShowsScreen(),
-    const SearchScreen(),
-    const SettingsScreen(),
-  ];
-
   void _onNavigationItemSelected(int index) {
     if (_selectedIndex == index) return;
     HapticFeedback.selectionClick();
@@ -176,17 +270,31 @@ class _AppNavigationState extends State<AppNavigation> with WidgetsBindingObserv
       _selectedIndex = index;
     });
     _lazyLoadForTab(index);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _focusSidebarOnTv());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      // Settings content focuses My Account; other tabs keep sidebar focus.
+      if (index != AppNavIndex.settings) _focusSidebarOnTv();
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context);
-    
     return PopScope(
       canPop: false,
       onPopInvoked: (didPop) async {
         if (didPop) return;
+
+        final settings = Provider.of<SettingsProvider>(context, listen: false);
+        final isTvLayout = settings.layoutMode == 'tv';
+
+        if (isTvLayout) {
+          if (_sidebarKey.currentState?.hasFocus ?? false) {
+            await _showExitDialog();
+          } else {
+            HapticFeedback.selectionClick();
+            _focusSidebarOnTv();
+          }
+          return;
+        }
 
         if (_selectedIndex != 0) {
           HapticFeedback.selectionClick();
@@ -194,26 +302,7 @@ class _AppNavigationState extends State<AppNavigation> with WidgetsBindingObserv
           return;
         }
 
-        final shouldExit = await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            backgroundColor: AppTheme.cardColor,
-            title: Text(l10n.translate('exit'), style: const TextStyle(color: AppTheme.textPrimary)),
-            content: Text(l10n.translate('confirm_exit'), style: const TextStyle(color: AppTheme.textSecondary)),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(false),
-                child: Text(l10n.translate('cancel'), style: const TextStyle(color: AppTheme.textSecondary)),
-              ),
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(true),
-                child: Text(l10n.translate('exit'), style: const TextStyle(color: AppTheme.accentRed)),
-              ),
-            ],
-          ),
-        );
-
-        if (shouldExit == true) SystemNavigator.pop();
+        await _showExitDialog();
       },
       child: Consumer<SettingsProvider>(
         builder: (context, settings, _) {
@@ -248,16 +337,22 @@ class _AppNavigationState extends State<AppNavigation> with WidgetsBindingObserv
                             textDirection: settings.language == 'ku' 
                                 ? TextDirection.rtl 
                                 : TextDirection.ltr,
-                            child: Column(
-                              children: [
-                                AppHeader(
-                                  showSurpriseMe: _selectedIndex == 2 || _selectedIndex == 3,
-                                  surpriseType: _selectedIndex == 2 ? 'movie' : 'tv',
-                                ),
-                                Expanded(
-                                  child: _screens[_selectedIndex],
-                                ),
-                              ],
+                            child: TvNavigationScope(
+                              isTvLayout: true,
+                              focusSidebar: _focusSidebarOnTv,
+                              focusPrimaryContent: _focusPrimaryContent,
+                              child: Column(
+                                children: [
+                                  if (_selectedIndex != AppNavIndex.wave)
+                                    AppHeader(
+                                      showSurpriseMe: _selectedIndex == AppNavIndex.movies || _selectedIndex == AppNavIndex.shows,
+                                      surpriseType: _selectedIndex == AppNavIndex.movies ? 'movie' : 'tv',
+                                    ),
+                                  Expanded(
+                                    child: _screenForIndex(_selectedIndex),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                         ),
@@ -269,18 +364,20 @@ class _AppNavigationState extends State<AppNavigation> with WidgetsBindingObserv
                   key: const ValueKey('mobile_layout'), // Key helps Flutter swap state
                   backgroundColor: AppTheme.backgroundColor,
                   extendBody: true,
-                  appBar: PreferredSize(
+                  appBar: _selectedIndex == AppNavIndex.wave
+                      ? null
+                      : PreferredSize(
                     preferredSize: const Size.fromHeight(60),
                     child: SafeArea(
                       child: AppHeader(
-                        showSurpriseMe: _selectedIndex == 2 || _selectedIndex == 3,
-                        surpriseType: _selectedIndex == 2 ? 'movie' : 'tv',
+                        showSurpriseMe: _selectedIndex == AppNavIndex.movies || _selectedIndex == AppNavIndex.shows,
+                        surpriseType: _selectedIndex == AppNavIndex.movies ? 'movie' : 'tv',
                       ),
                     ),
                   ),
                   body: SafeArea(
                     bottom: false,
-                    child: _screens[_selectedIndex],
+                    child: _screenForIndex(_selectedIndex),
                   ),
                   bottomNavigationBar: CustomBottomNav(
                     currentIndex: _selectedIndex,

@@ -8,8 +8,8 @@ class PlayerLauncher {
     required Channel channel,
     required List<Channel>? allChannels,
     required int? initialChannelIndex,
-  }) async {
-    Navigator.push(
+  }) {
+    return Navigator.push<void>(
       context,
       MaterialPageRoute(
         builder: (context) => PlayerScreen(

@@ -1,20 +1,22 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:better_player_plus/better_player_plus.dart';
-import 'package:wakelock_plus/wakelock_plus.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import '../models/channel.dart';
-import '../config/app_theme.dart';
 import 'package:provider/provider.dart';
-import '../providers/settings_provider.dart';
-import '../providers/channels_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
+
+import '../config/app_theme.dart';
 import '../l10n/app_localizations.dart';
+import '../iptv_exo_player.dart';
+import '../models/channel.dart';
+import '../providers/channels_provider.dart';
+import '../providers/settings_provider.dart';
+import '../screens/security_block_screen.dart';
 import '../utils/security_utils.dart';
 import '../widgets/channel_logo.dart';
-import '../screens/security_block_screen.dart';
 
 class PlayerScreen extends StatefulWidget {
   final Channel channel;
@@ -32,91 +34,140 @@ class PlayerScreen extends StatefulWidget {
   State<PlayerScreen> createState() => _PlayerScreenState();
 }
 
-class _PlayerScreenState extends State<PlayerScreen> {
-  // BetterPlayer Controller
-  BetterPlayerController? _betterPlayerController;
+class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver {
+  LiveExoPlayerController? _player;
+
   Timer? _securityTimer;
-  
-  bool _hasError = false; 
+  Timer? _retryTimer;
+  Timer? _hideChannelInfoTimer;
+  Timer? _aspectHintTimer;
+
+  bool _hasError = false;
   bool _showChannelSelector = false;
   bool _showChannelInfo = false;
-  Timer? _hideChannelSelectorTimer;
-  Timer? _hideChannelInfoTimer;
-  
-  // Channel switching
+
   late Channel _currentChannel;
   late int _currentChannelIndex;
   late int _focusedChannelIndex;
-  
+
   List<Channel> _channels = [];
   final ScrollController _channelScrollController = ScrollController();
   final ScrollController _categoryScrollController = ScrollController();
   String _initialLayoutMode = 'tv';
-  
-  // Category management
+
   List<String> _categories = [];
   String _selectedCategory = 'ALL';
   int _focusedCategoryIndex = 0;
   bool _isCategoryFocused = false;
+  bool _categoryPanelVisible = false;
+  String? _lastOkActivatedChannelId;
 
-  // Aspect ratio (tap to cycle — no menu)
   static const _aspectLabels = ['Auto', '16:9', '4:3', 'Stretch', 'Zoom'];
   int _aspectRatioIndex = 0;
   bool _showAspectHint = false;
-  Timer? _aspectHintTimer;
 
-  // Auto-reconnect when stream freezes or stops (silent — no UI)
-  Timer? _streamWatchdogTimer;
-  Timer? _reconnectDebounceTimer;
-  DateTime? _lastPlaybackActivity;
-  bool _reconnectRunning = false;
-  int _reconnectAttempt = 0;
-  int _reconnectBackoffMs = 2000;
-  static const _maxReconnectAttempts = 8;
-  static const _maxReconnectBackoffMs = 15000;
-  void Function(BetterPlayerEvent)? _playerEventsListener;
+  int _retryAttempt = 0;
+  int _playbackGeneration = 0;
+  static const _maxRetryAttempts = 6;
+  static const _retryBackoffMs = 1500;
+
+  final FocusNode _backButtonFocusNode = FocusNode(debugLabel: 'playerBack');
+  final FocusNode _favoriteFocusNode = FocusNode(debugLabel: 'playerFavorite');
+  final FocusNode _aspectRatioFocusNode = FocusNode(debugLabel: 'playerAspect');
+  final FocusNode _channelsFocusNode = FocusNode(debugLabel: 'playerChannels');
+  static const MethodChannel _backChannel =
+      MethodChannel('com.livewave.player/back');
+
+  bool _exitInProgress = false;
+
+  LiveExoPlayerController get _livePlayer {
+    if (_player?.isDisposed == true) {
+      _player = null;
+    }
+    return _player ??= LiveExoPlayerController()..onEvent = _onPlayerEvent;
+  }
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _startSecurityMonitoring();
-    WakelockPlus.enable(); 
-    
-    // Get initial layout mode to restore it later
+    WakelockPlus.enable();
+
     final settings = Provider.of<SettingsProvider>(context, listen: false);
     _initialLayoutMode = settings.layoutMode;
-    
-    // Initialize data
-    final channelsProvider = Provider.of<ChannelsProvider>(context, listen: false);
+
+    final channelsProvider =
+        Provider.of<ChannelsProvider>(context, listen: false);
     _categories = ['ALL', ...channelsProvider.categories];
     _currentChannel = widget.channel;
     _selectedCategory = widget.channel.category.toUpperCase();
-    
-    // Initial channel list should be the one from the current channel's category
     _channels = widget.allChannels ?? [widget.channel];
-    
     _currentChannelIndex = widget.initialChannelIndex ?? 0;
     _focusedChannelIndex = _currentChannelIndex;
-    
-    // Find initial category index
+
     final catIndex = _categories.indexOf(_selectedCategory);
     if (catIndex != -1) {
       _focusedCategoryIndex = catIndex;
     }
-    
-    // Start playback
+
     _loadAspectRatioPreference();
-    _setupPlayer();
-    _startStreamWatchdog();
-    
-    // Show info initially
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_livePlayer.ensureInitialized());
+      unawaited(_startLivePlayback());
+    });
+    HardwareKeyboard.instance.addHandler(_handleHardwareKey);
+    if (Platform.isAndroid) {
+      _backChannel.setMethodCallHandler(_onAndroidBackChannel);
+      _backChannel.invokeMethod('setBackInterceptorEnabled', {'enabled': true});
+    }
+
     _showChannelInfoOverlay();
-    
+
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    SystemChrome.setPreferredOrientations([
+    _lockToLandscape();
+  }
+
+  bool get _isMobileLayout => _initialLayoutMode == 'mobile';
+
+  void _lockToLandscape() {
+    SystemChrome.setPreferredOrientations(const [
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
     ]);
+  }
+
+  Future<void> _restoreOrientationAfterPlayer() async {
+    if (_isMobileLayout) {
+      await SystemChrome.setPreferredOrientations(const [
+        DeviceOrientation.portraitUp,
+        DeviceOrientation.portraitDown,
+      ]);
+    } else {
+      await SystemChrome.setPreferredOrientations(const [
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+    }
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted && !_exitInProgress) {
+      _lockToLandscape();
+    }
+  }
+
+  @override
+  void didChangeMetrics() {
+    if (!mounted || _exitInProgress) return;
+    final views = WidgetsBinding.instance.platformDispatcher.views;
+    if (views.isEmpty) return;
+    final view = views.first;
+    if (view.physicalSize.height > view.physicalSize.width) {
+      _lockToLandscape();
+    }
   }
 
   void _startSecurityMonitoring() {
@@ -124,7 +175,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
       final isSecurityAlert = await SecurityUtils.isVpnOrProxyActive();
       if (isSecurityAlert && mounted) {
         _securityTimer?.cancel();
-        _betterPlayerController?.pause();
+        unawaited(_releasePlayback());
+        unawaited(_restoreOrientationAfterPlayer());
         Navigator.of(context).pushAndRemoveUntil(
           MaterialPageRoute(builder: (context) => const SecurityBlockScreen()),
           (route) => false,
@@ -172,38 +224,143 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   void _applyAspectRatio() {
-    final controller = _betterPlayerController;
-    if (controller == null) return;
+    _livePlayer.applyAspectRatio(modeIndex: _aspectRatioIndex);
+  }
 
-    switch (_aspectRatioIndex) {
-      case 0: // Auto
-        final natural = controller.videoPlayerController?.value.aspectRatio;
-        if (natural != null && natural > 0) {
-          controller.setOverriddenAspectRatio(natural);
-        }
-        controller.setOverriddenFit(BoxFit.contain);
+  void _onPlayerEvent(String event, Map<String, dynamic> data) {
+    if (!mounted) return;
+    switch (event) {
+      case 'firstFrameRendered':
+        _showChannelInfoOverlay();
+        _retryAttempt = 0;
+        if (mounted) setState(() => _hasError = false);
         break;
-      case 1: // 16:9
-        controller.setOverriddenAspectRatio(16 / 9);
-        controller.setOverriddenFit(BoxFit.contain);
+      case 'initialized':
+      case 'playing':
+      case 'videoSize':
+        _retryAttempt = 0;
+        if (mounted) setState(() => _hasError = false);
         break;
-      case 2: // 4:3
-        controller.setOverriddenAspectRatio(4 / 3);
-        controller.setOverriddenFit(BoxFit.contain);
+      case 'exception':
+        _scheduleRetryOrError();
         break;
-      case 3: // Stretch
-        controller.setOverriddenFit(BoxFit.fill);
-        break;
-      case 4: // Zoom
-        controller.setOverriddenFit(BoxFit.cover);
-        break;
+    }
+    setState(() {});
+  }
+
+  Future<void> _startLivePlayback() async {
+    try {
+      debugPrint('[Player] Starting live playback for ${_currentChannel.name}');
+      await _playCurrentChannel();
+    } catch (e, st) {
+      debugPrint('[Player] Live playback start failed: $e\n$st');
+      if (mounted) setState(() => _hasError = true);
     }
   }
 
-  void _markPlaybackActivity() {
-    _lastPlaybackActivity = DateTime.now();
-    _reconnectAttempt = 0;
-    _reconnectBackoffMs = 2000;
+  Future<void> _playCurrentChannel() async {
+    final url = _currentChannel.stream.trim();
+    if (url.isEmpty) {
+      debugPrint('[Player] Empty stream URL for ${_currentChannel.name}');
+      if (mounted) setState(() => _hasError = true);
+      return;
+    }
+    final generation = _playbackGeneration;
+    try {
+      debugPrint('[Player] Playing channel=${_currentChannel.name}');
+      await _livePlayer.ensureInitialized();
+      if (!mounted || generation != _playbackGeneration) return;
+      setState(() {});
+      await WidgetsBinding.instance.endOfFrame;
+      await _livePlayer.mountTextureAndAttachSurface();
+      await _livePlayer.waitForSurface();
+      if (!mounted || generation != _playbackGeneration) return;
+      await _livePlayer.setLiveChannel(url);
+      if (!mounted || generation != _playbackGeneration) return;
+      _applyAspectRatio();
+      setState(() => _hasError = false);
+    } catch (e, st) {
+      if (!mounted || generation != _playbackGeneration) return;
+      debugPrint('[Player] Playback failed: $e\n$st');
+      _scheduleRetryOrError();
+    }
+  }
+
+  void _scheduleRetryOrError() {
+    if (!mounted || _hasError) return;
+    if (_retryAttempt >= _maxRetryAttempts) {
+      setState(() => _hasError = true);
+      return;
+    }
+    _retryTimer?.cancel();
+    _retryTimer = Timer(const Duration(milliseconds: _retryBackoffMs), () async {
+      if (!mounted || _hasError) return;
+      _retryAttempt++;
+      try {
+        await _livePlayer.retry();
+        if (mounted) setState(() {});
+      } catch (e) {
+        debugPrint('Retry failed: $e');
+        if (_retryAttempt >= _maxRetryAttempts && mounted) {
+          setState(() => _hasError = true);
+        } else if (mounted) {
+          _scheduleRetryOrError();
+        }
+      }
+    });
+  }
+
+  Future<void> _retryCurrentChannel() async {
+    _retryTimer?.cancel();
+    _retryAttempt = 0;
+    setState(() => _hasError = false);
+    await _playCurrentChannel();
+  }
+
+  Future<void> _switchToChannel(Channel channel) async {
+    _retryTimer?.cancel();
+    _retryAttempt = 0;
+    setState(() {
+      _currentChannel = channel;
+      _hasError = false;
+    });
+    await _playCurrentChannel();
+  }
+
+  DateTime? _lastChannelZapAt;
+
+  bool _isChannelZapKey(LogicalKeyboardKey key) {
+    return key == LogicalKeyboardKey.arrowUp ||
+        key == LogicalKeyboardKey.arrowDown ||
+        key == LogicalKeyboardKey.channelUp ||
+        key == LogicalKeyboardKey.channelDown;
+  }
+
+  bool _handleChannelZapKey(LogicalKeyboardKey key) {
+    if (_channels.length <= 1 || !_isChannelZapKey(key)) return false;
+
+    final now = DateTime.now();
+    if (_lastChannelZapAt != null &&
+        now.difference(_lastChannelZapAt!) <
+            const Duration(milliseconds: 400)) {
+      return true;
+    }
+
+    if (key == LogicalKeyboardKey.arrowUp ||
+        key == LogicalKeyboardKey.channelDown) {
+      _switchToPreviousChannel();
+    } else {
+      _switchToNextChannel();
+    }
+    _lastChannelZapAt = now;
+    return true;
+  }
+
+  Future<dynamic> _onAndroidBackChannel(MethodCall call) async {
+    if (call.method == 'onBackPressed') {
+      _handleBackAction();
+    }
+    return null;
   }
 
   bool _isBackKey(LogicalKeyboardKey key) {
@@ -213,272 +370,116 @@ class _PlayerScreenState extends State<PlayerScreen> {
         key == LogicalKeyboardKey.backspace;
   }
 
+  bool _isActivateKey(LogicalKeyboardKey key) {
+    return key == LogicalKeyboardKey.select ||
+        key == LogicalKeyboardKey.enter ||
+        key == LogicalKeyboardKey.numpadEnter ||
+        key == LogicalKeyboardKey.space ||
+        key == LogicalKeyboardKey.gameButtonA;
+  }
+
+  bool get _isTvMode => _initialLayoutMode == 'tv';
+
+  bool _handleHardwareKey(KeyEvent event) {
+    if (event is! KeyDownEvent) return false;
+
+    if (_isActivateKey(event.logicalKey)) {
+      if (_showChannelSelector) return false;
+      if (_showChannelInfo && _hasBottomChromeFocus) return false;
+      _handleOkPress();
+      return true;
+    }
+
+    if (!_showChannelSelector && _handleChannelZapKey(event.logicalKey)) {
+      return true;
+    }
+
+    if (!_isBackKey(event.logicalKey)) return false;
+    _handleBackAction();
+    return true;
+  }
+
   bool get _showPlayerChrome =>
       _hasError || _showChannelSelector || _showChannelInfo;
 
-  void _startStreamWatchdog() {
-    _streamWatchdogTimer?.cancel();
-    _streamWatchdogTimer = Timer.periodic(const Duration(seconds: 8), (_) => _checkStreamHealth());
-  }
-
-  void _checkStreamHealth() {
-    if (!mounted || _hasError || _reconnectRunning) return;
-
-    final videoController = _betterPlayerController?.videoPlayerController;
-    if (videoController == null || !videoController.value.initialized) return;
-
-    final value = videoController.value;
-    if (value.hasError) {
-      _scheduleReconnect('error');
-      return;
-    }
-
-    final lastActivity = _lastPlaybackActivity;
-    if (lastActivity == null) return;
-
-    final stalledSeconds = DateTime.now().difference(lastActivity).inSeconds;
-    if (value.isBuffering && stalledSeconds >= 30) {
-      _scheduleReconnect('buffering');
-    }
-  }
-
-  void _scheduleReconnect(String reason) {
-    if (_reconnectRunning || _hasError || (_reconnectDebounceTimer?.isActive ?? false)) return;
-    debugPrint('Live TV reconnect scheduled ($reason) in ${_reconnectBackoffMs}ms');
-    _reconnectDebounceTimer = Timer(Duration(milliseconds: _reconnectBackoffMs), _reconnectStream);
-  }
-
-  Future<void> _reconnectStream() async {
-    if (!mounted || _hasError || _reconnectRunning) return;
-
-    final controller = _betterPlayerController;
-    if (controller?.betterPlayerDataSource == null) return;
-
-    _reconnectRunning = true;
-    try {
-      await controller!.retryDataSource();
-      await controller.play();
-      _markPlaybackActivity();
-      _applyAspectRatio();
-    } catch (e) {
-      debugPrint('Reconnect failed: $e');
-      _reconnectAttempt++;
-      _reconnectBackoffMs =
-          (_reconnectBackoffMs * 1.5).round().clamp(2000, _maxReconnectBackoffMs);
-      if (_reconnectAttempt < _maxReconnectAttempts) {
-        _scheduleReconnect('retry_failed');
-      } else if (mounted) {
-        setState(() => _hasError = true);
-      }
-    } finally {
-      _reconnectRunning = false;
-    }
-  }
-
-  void _attachPlayerEventsListener() {
-    final controller = _betterPlayerController;
-    if (controller == null) return;
-
-    if (_playerEventsListener != null) {
-      controller.removeEventsListener(_playerEventsListener!);
-    }
-
-    _playerEventsListener = (event) {
-      switch (event.betterPlayerEventType) {
-        case BetterPlayerEventType.initialized:
-        case BetterPlayerEventType.play:
-        case BetterPlayerEventType.progress:
-        case BetterPlayerEventType.bufferingEnd:
-          _markPlaybackActivity();
-          if (event.betterPlayerEventType == BetterPlayerEventType.initialized) {
-            _applyAspectRatio();
-          }
-          break;
-        case BetterPlayerEventType.exception:
-          debugPrint('BetterPlayer Exception: ${event.parameters}');
-          _scheduleReconnect('exception');
-          break;
-        default:
-          break;
-      }
-    };
-
-    controller.addEventsListener(_playerEventsListener!);
-  }
-
-  /// Detect IPTV stream container — many URLs have no extension (audio-only if wrong).
-  BetterPlayerVideoFormat _detectLiveStreamFormat(String url) {
-    final lower = url.toLowerCase();
-    if (lower.contains('.m3u8') || lower.contains('m3u8')) {
-      return BetterPlayerVideoFormat.hls;
-    }
-    if (lower.contains('.mpd')) {
-      return BetterPlayerVideoFormat.dash;
-    }
-    // .ts, /live/, Xtream-style paths → MPEG-TS progressive
-    return BetterPlayerVideoFormat.other;
-  }
-
-  Future<void> _setupPlayer() async {
-    bool isPiracyToolActive = false;
-    try {
-      // 1. Check for System Proxy (HttpCanary/Charles)
-      final proxy = HttpClient.findProxyFromEnvironment(Uri.parse("https://www.google.com"));
-      if (proxy.contains("PROXY") || proxy.contains("HTTP")) {
-        isPiracyToolActive = true;
-      }
-
-      // 2. Check for VPN Interfaces (HttpCanary VPN Mode)
-      final interfaces = await NetworkInterface.list();
-      for (var interface in interfaces) {
-        final name = interface.name.toLowerCase();
-        if (name.contains('tun') || name.contains('ppp') || name.contains('tap') || name.contains('vpn')) {
-          isPiracyToolActive = true;
-          break;
-        }
-      }
-    } catch (e) {
-      // Ignore errors in check, but log it
-      debugPrint("Security check error: $e");
-    }
-
-    if (isPiracyToolActive) {
-      setState(() => _hasError = true);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            backgroundColor: AppTheme.accentRed,
-            content: Text('Security Alert: Please disable VPN or Proxy to watch.', 
-              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-          ),
-        );
-      }
-      return;
-    }
-
-    final streamUrl = _currentChannel.stream.trim();
-
-    if (streamUrl.isEmpty) {
-      setState(() => _hasError = true);
-      return;
-    }
-
-    // Dispose previous controller
-    if (_playerEventsListener != null && _betterPlayerController != null) {
-      _betterPlayerController!.removeEventsListener(_playerEventsListener!);
-      _playerEventsListener = null;
-    }
-    _betterPlayerController?.dispose();
-    _betterPlayerController = null;
-
-    setState(() => _hasError = false);
-
-    try {
-      // 1. Configure for Performance (Compatible with v1.0.8)
-      BetterPlayerConfiguration betterPlayerConfiguration = BetterPlayerConfiguration(
-        autoPlay: true,
-        fit: BoxFit.contain,
-        allowedScreenSleep: false,
-        handleLifecycle: true,
-        // PERFORMANCE: Disable overhead
-        subtitlesConfiguration: const BetterPlayerSubtitlesConfiguration(fontSize: 0),
-        controlsConfiguration: const BetterPlayerControlsConfiguration(
-          showControls: false,
-          enableFullscreen: false,
-        ),
+  void _exitPlayer() {
+    if (!mounted || _exitInProgress) return;
+    _exitInProgress = true;
+    if (Platform.isAndroid) {
+      unawaited(
+        _backChannel.invokeMethod('setBackInterceptorEnabled', {'enabled': false}),
       );
+    }
+    unawaited(() async {
+      await _restoreOrientationAfterPlayer();
+      if (!mounted) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        Navigator.of(context).pop();
+      });
+    }());
+  }
 
-      // 2. Configure Data Source
-      BetterPlayerDataSource dataSource = BetterPlayerDataSource(
-        BetterPlayerDataSourceType.network,
-        streamUrl,
-        liveStream: true,
-        videoFormat: _detectLiveStreamFormat(streamUrl),
-        
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        },
-        notificationConfiguration: const BetterPlayerNotificationConfiguration(
-          showNotification: false,
-        ),
-        useAsmsSubtitles: false,
-        useAsmsTracks: true,
-        useAsmsAudioTracks: true,
-        bufferingConfiguration: const BetterPlayerBufferingConfiguration(
-          minBufferMs: 20000,
-          maxBufferMs: 50000,
-          bufferForPlaybackMs: 2500,
-          bufferForPlaybackAfterRebufferMs: 5000,
-        ),
-      );
-      
-      _betterPlayerController = BetterPlayerController(betterPlayerConfiguration);
-      await _betterPlayerController!.setupDataSource(dataSource);
-      _attachPlayerEventsListener();
-      _applyAspectRatio();
-      _markPlaybackActivity();
-
+  Future<void> _releasePlayback() async {
+    _retryTimer?.cancel();
+    final player = _player;
+    _player = null;
+    try {
+      await player?.dispose();
     } catch (e) {
-      debugPrint('Error setting up player: $e');
-      if (mounted) setState(() => _hasError = true);
+      debugPrint('Playback release failed: $e');
     }
   }
 
   @override
   void dispose() {
+    _playbackGeneration++;
+    WidgetsBinding.instance.removeObserver(this);
     _securityTimer?.cancel();
-    _streamWatchdogTimer?.cancel();
-    _reconnectDebounceTimer?.cancel();
+    _retryTimer?.cancel();
     _aspectHintTimer?.cancel();
     WakelockPlus.disable();
-    _hideChannelSelectorTimer?.cancel();
     _hideChannelInfoTimer?.cancel();
+    HardwareKeyboard.instance.removeHandler(_handleHardwareKey);
+    if (Platform.isAndroid) {
+      _backChannel.invokeMethod('setBackInterceptorEnabled', {'enabled': false});
+      _backChannel.setMethodCallHandler(null);
+    }
+    _backButtonFocusNode.dispose();
+    _favoriteFocusNode.dispose();
+    _aspectRatioFocusNode.dispose();
+    _channelsFocusNode.dispose();
     _channelScrollController.dispose();
     _categoryScrollController.dispose();
-    
-    if (_playerEventsListener != null && _betterPlayerController != null) {
-      _betterPlayerController!.removeEventsListener(_playerEventsListener!);
-    }
-    _betterPlayerController?.dispose();
 
-    // Restore orientation based on layout mode
-    if (_initialLayoutMode == 'tv') {
-      SystemChrome.setPreferredOrientations([
-        DeviceOrientation.landscapeLeft,
-        DeviceOrientation.landscapeRight,
-      ]);
-    } else {
-      SystemChrome.setPreferredOrientations([
-        DeviceOrientation.portraitUp,
-        DeviceOrientation.portraitDown,
-      ]);
-    }
+    unawaited(_releasePlayback());
 
-    // Restore system UI
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    if (!_exitInProgress) {
+      unawaited(_restoreOrientationAfterPlayer());
+    }
 
     super.dispose();
   }
 
-  // --- Channel & UI Logic ---
-
   Future<void> _activateFocusedChannel() async {
     final focusedChannel = _channels[_focusedChannelIndex];
-    
-    // Check by unique ID, not index
+
     if (focusedChannel.id == _currentChannel.id) {
-      _closeChannelSelector(showInfo: true);
+      if (!_showChannelSelector) return;
+      if (_lastOkActivatedChannelId == focusedChannel.id) {
+        _closeChannelSelector(showInfo: true);
+      } else {
+        setState(() => _lastOkActivatedChannelId = focusedChannel.id);
+      }
       return;
     }
-    
+
     setState(() {
       _currentChannelIndex = _focusedChannelIndex;
-      _currentChannel = _channels[_currentChannelIndex];
+      _lastOkActivatedChannelId = focusedChannel.id;
     });
-    
-    await _setupPlayer();
-    _closeChannelSelector(showInfo: true);
-    _showChannelInfoOverlay();
+
+    await _switchToChannel(focusedChannel);
   }
 
   void _switchToNextChannel() {
@@ -489,48 +490,74 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   void _switchToPreviousChannel() {
     if (_channels.length <= 1) return;
-    final prevIndex = (_currentChannelIndex - 1 + _channels.length) % _channels.length;
+    final prevIndex =
+        (_currentChannelIndex - 1 + _channels.length) % _channels.length;
     _forceSwitchChannel(prevIndex);
   }
 
   Future<void> _forceSwitchChannel(int index) async {
-     setState(() {
+    setState(() {
       _currentChannelIndex = index;
-      _currentChannel = _channels[index];
-      _focusedChannelIndex = index; 
+      _focusedChannelIndex = index;
     });
-    await _setupPlayer();
+    await _switchToChannel(_channels[index]);
     _showChannelInfoOverlay();
   }
 
   void _changeCategory(String category) {
-    final channelsProvider = Provider.of<ChannelsProvider>(context, listen: false);
+    final channelsProvider =
+        Provider.of<ChannelsProvider>(context, listen: false);
+    final isTv =
+        Provider.of<SettingsProvider>(context, listen: false).layoutMode == 'tv';
     setState(() {
       _selectedCategory = category;
       _channels = channelsProvider.filterByCategory(category);
       _focusedChannelIndex = 0;
       _isCategoryFocused = false;
+      _lastOkActivatedChannelId = null;
+      if (isTv) _categoryPanelVisible = false;
     });
     _scrollToFocusedChannel();
-    _startHideChannelSelectorTimer();
+  }
+
+  void _revealCategoryPanel() {
+    setState(() {
+      _categoryPanelVisible = true;
+      _isCategoryFocused = true;
+    });
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _scrollToFocusedCategory());
+  }
+
+  bool _isTvLayout(BuildContext context) {
+    return Provider.of<SettingsProvider>(context, listen: false).layoutMode ==
+        'tv';
+  }
+
+  double _channelSelectorWidth(BuildContext context) {
+    if (!_isTvLayout(context) || _categoryPanelVisible) {
+      return _channelListWidthFull;
+    }
+    return _channelListWidthCompact;
   }
 
   void _moveCategoryFocus(int newIndex) {
     if (newIndex < 0 || newIndex >= _categories.length) return;
     setState(() => _focusedCategoryIndex = newIndex);
     _scrollToFocusedCategory();
-    _startHideChannelSelectorTimer();
   }
 
   void _scrollToFocusedCategory() {
     if (!_categoryScrollController.hasClients) return;
     const itemHeight = 52.0;
     final viewportHeight = _categoryScrollController.position.viewportDimension;
-    final scrollPosition =
-        (_focusedCategoryIndex * itemHeight) - (viewportHeight / 2) + (itemHeight / 2);
+    final scrollPosition = (_focusedCategoryIndex * itemHeight) -
+        (viewportHeight / 2) +
+        (itemHeight / 2);
 
     _categoryScrollController.animateTo(
-      scrollPosition.clamp(0.0, _categoryScrollController.position.maxScrollExtent),
+      scrollPosition
+          .clamp(0.0, _categoryScrollController.position.maxScrollExtent),
       duration: const Duration(milliseconds: 300),
       curve: Curves.easeInOut,
     );
@@ -543,20 +570,100 @@ class _PlayerScreenState extends State<PlayerScreen> {
       _showChannelSelector = false;
     });
     _startHideChannelInfoTimer();
+    _focusDefaultBottomChromeControl();
+  }
+
+  List<FocusNode> get _bottomChromeFocusOrder => [
+        _favoriteFocusNode,
+        _aspectRatioFocusNode,
+        _channelsFocusNode,
+      ];
+
+  bool get _hasBottomChromeFocus =>
+      _bottomChromeFocusOrder.any((node) => node.hasFocus);
+
+  void _focusDefaultBottomChromeControl() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_showChannelInfo || _showChannelSelector) return;
+      _channelsFocusNode.requestFocus();
+    });
+  }
+
+  void _focusAdjacentBottomChromeControl({required bool forward}) {
+    final order = _bottomChromeFocusOrder;
+    var index = order.indexWhere((node) => node.hasFocus);
+    if (index < 0) {
+      _channelsFocusNode.requestFocus();
+      return;
+    }
+    final nextIndex = forward
+        ? (index + 1) % order.length
+        : (index - 1 + order.length) % order.length;
+    order[nextIndex].requestFocus();
+  }
+
+  bool _handleChromeHorizontalNav(LogicalKeyboardKey key) {
+    if (!_showChannelInfo || _showChannelSelector) return false;
+
+    final isRtl =
+        Provider.of<SettingsProvider>(context, listen: false).isRtl;
+    if (key == LogicalKeyboardKey.arrowRight) {
+      _focusAdjacentBottomChromeControl(forward: !isRtl);
+      return true;
+    }
+    if (key == LogicalKeyboardKey.arrowLeft) {
+      _focusAdjacentBottomChromeControl(forward: isRtl);
+      return true;
+    }
+    return false;
+  }
+
+  bool _handleChromeVerticalNav(LogicalKeyboardKey key) {
+    if (!_showChannelInfo || _showChannelSelector || _isTvLayout(context)) {
+      return false;
+    }
+
+    if (key == LogicalKeyboardKey.arrowUp && _hasBottomChromeFocus) {
+      _backButtonFocusNode.requestFocus();
+      return true;
+    }
+    if (key == LogicalKeyboardKey.arrowDown && _backButtonFocusNode.hasFocus) {
+      _focusDefaultBottomChromeControl();
+      return true;
+    }
+    return false;
   }
 
   void _startHideChannelInfoTimer() {
     _hideChannelInfoTimer?.cancel();
-    _hideChannelInfoTimer = Timer(const Duration(seconds: 6), () {
+    _hideChannelInfoTimer = Timer(const Duration(seconds: 3), () {
       if (mounted && !_showChannelSelector) {
         setState(() => _showChannelInfo = false);
       }
     });
   }
 
-  void _hideChannelInfo() {
-    setState(() => _showChannelInfo = false);
-    _hideChannelInfoTimer?.cancel();
+  Future<void> _toggleChannelFavorite(ChannelsProvider provider) async {
+    final l10n = AppLocalizations.of(context);
+    final wasFavorite = provider.isFavorite(_currentChannel.id);
+    await provider.toggleFavorite(_currentChannel.id);
+    _startHideChannelInfoTimer();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          wasFavorite
+              ? '${_currentChannel.name} ${l10n.translate('removed_from_fav')}'
+              : '${_currentChannel.name} ${l10n.translate('added_to_fav')}',
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+        duration: const Duration(seconds: 2),
+        backgroundColor:
+            wasFavorite ? AppTheme.textSecondary : AppTheme.accentRed,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ),
+    );
   }
 
   void _onPlayerTap() {
@@ -579,10 +686,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   void _openChannelSelector() {
+    final isTv = _isTvMode;
     setState(() {
       _showChannelSelector = true;
       _showChannelInfo = false;
       _isCategoryFocused = false;
+      _categoryPanelVisible = !isTv;
+      _lastOkActivatedChannelId = null;
       _focusedChannelIndex = _currentChannelIndex;
 
       final catIndex = _categories.indexOf(_selectedCategory);
@@ -597,86 +707,138 @@ class _PlayerScreenState extends State<PlayerScreen> {
     });
 
     _hideChannelInfoTimer?.cancel();
-    _startHideChannelSelectorTimer();
   }
 
   void _closeChannelSelector({bool showInfo = false}) {
     setState(() {
       _showChannelSelector = false;
+      _categoryPanelVisible = false;
+      _lastOkActivatedChannelId = null;
       if (showInfo) _showChannelInfo = true;
     });
-    _hideChannelSelectorTimer?.cancel();
-    if (showInfo) _startHideChannelInfoTimer();
+    _hideChannelInfoTimer?.cancel();
+    if (showInfo) {
+      _startHideChannelInfoTimer();
+      _focusDefaultBottomChromeControl();
+    }
   }
 
-  DateTime? _lastBackHandledAt;
-
   void _handleBackAction() {
-    final now = DateTime.now();
-    if (_lastBackHandledAt != null &&
-        now.difference(_lastBackHandledAt!) <
-            const Duration(milliseconds: 300)) {
+    if (_exitInProgress) return;
+    if (_showChannelSelector) {
+      if (_isTvMode && _categoryPanelVisible) {
+        setState(() {
+          _categoryPanelVisible = false;
+          _isCategoryFocused = false;
+        });
+        return;
+      }
+      _closeChannelSelector(showInfo: false);
       return;
     }
-    _lastBackHandledAt = now;
-
-    if (_showChannelSelector) {
-      _closeChannelSelector(showInfo: true);
-    } else if (_showChannelInfo) {
-      _hideChannelInfo();
-    } else if (mounted && Navigator.canPop(context)) {
-      Navigator.pop(context);
-    }
+    _exitPlayer();
   }
 
   Widget _buildTopBackButton() {
-    final left = _showChannelSelector ? _channelListWidth + 8.0 : 8.0;
+    if (_isTvLayout(context)) {
+      return const SizedBox.shrink();
+    }
+
+    final left =
+        _showChannelSelector ? _channelSelectorWidth(context) + 8.0 : 8.0;
+
     return Positioned(
       top: 0,
       left: left,
-      child: SafeArea(
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: _handleBackAction,
-          child: Container(
-            width: 52,
-            height: 52,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.5),
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.white24),
+      child: AnimatedOpacity(
+        duration: const Duration(milliseconds: 300),
+        opacity: _showPlayerChrome ? 1.0 : 0.0,
+        child: IgnorePointer(
+          ignoring: !_showPlayerChrome,
+          child: SafeArea(
+            child: Focus(
+              focusNode: _backButtonFocusNode,
+              canRequestFocus: true,
+              onKeyEvent: (node, event) {
+                if (event is! KeyDownEvent) {
+                  return KeyEventResult.ignored;
+                }
+                if (_handleChromeVerticalNav(event.logicalKey)) {
+                  return KeyEventResult.handled;
+                }
+                if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+                  _focusDefaultBottomChromeControl();
+                  return KeyEventResult.handled;
+                }
+                if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+                  _focusDefaultBottomChromeControl();
+                  return KeyEventResult.handled;
+                }
+                if (_isBackKey(event.logicalKey) ||
+                    event.logicalKey == LogicalKeyboardKey.select ||
+                    event.logicalKey == LogicalKeyboardKey.enter) {
+                  _handleBackAction();
+                  return KeyEventResult.handled;
+                }
+                return KeyEventResult.ignored;
+              },
+              child: Builder(
+                builder: (context) {
+                  final isFocused = Focus.of(context).hasFocus;
+                  return GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: _handleBackAction,
+                    child: Container(
+                      width: 56,
+                      height: 56,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: isFocused
+                            ? Colors.white
+                            : Colors.black.withOpacity(0.55),
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: isFocused ? Colors.white : Colors.white24,
+                          width: isFocused ? 2.5 : 1,
+                        ),
+                      ),
+                      child: Icon(
+                        Icons.arrow_back,
+                        color: isFocused ? Colors.black : Colors.white,
+                        size: 26,
+                      ),
+                    ),
+                  );
+                },
+              ),
             ),
-            child: const Icon(Icons.arrow_back, color: Colors.white, size: 26),
           ),
         ),
       ),
     );
   }
 
-  void _startHideChannelSelectorTimer() {
-    _hideChannelSelectorTimer?.cancel();
-    _hideChannelSelectorTimer = Timer(const Duration(seconds: 8), () { // Increased for better browsing
-      if (mounted) setState(() => _showChannelSelector = false);
-    });
-  }
-
   void _moveFocus(int newIndex) {
     if (newIndex < 0 || newIndex >= _channels.length) return;
-    setState(() => _focusedChannelIndex = newIndex);
+    if (newIndex == _focusedChannelIndex) return;
+    setState(() {
+      _focusedChannelIndex = newIndex;
+      _lastOkActivatedChannelId = null;
+    });
     _scrollToFocusedChannel();
-    _startHideChannelSelectorTimer();
   }
 
   void _scrollToFocusedChannel() {
     if (!_channelScrollController.hasClients) return;
     const itemHeight = 72.0;
     final viewportHeight = _channelScrollController.position.viewportDimension;
-    final scrollPosition =
-        (_focusedChannelIndex * itemHeight) - (viewportHeight / 2) + (itemHeight / 2);
+    final scrollPosition = (_focusedChannelIndex * itemHeight) -
+        (viewportHeight / 2) +
+        (itemHeight / 2);
 
     _channelScrollController.animateTo(
-      scrollPosition.clamp(0.0, _channelScrollController.position.maxScrollExtent),
+      scrollPosition
+          .clamp(0.0, _channelScrollController.position.maxScrollExtent),
       duration: const Duration(milliseconds: 300),
       curve: Curves.easeInOut,
     );
@@ -684,118 +846,178 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final player = _livePlayer;
+
     return PopScope(
       canPop: false,
-      onPopInvoked: (didPop) {
-        if (didPop) return;
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop || _exitInProgress) return;
         _handleBackAction();
       },
-      child: Focus(
-      autofocus: true,
-      onKeyEvent: (node, event) {
-        if (event is KeyDownEvent) {
-          if (_showChannelSelector) {
-            if (_isCategoryFocused) {
-              if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
-                _moveCategoryFocus((_focusedCategoryIndex - 1 + _categories.length) % _categories.length);
-                return KeyEventResult.handled;
-              } else if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
-                _moveCategoryFocus((_focusedCategoryIndex + 1) % _categories.length);
-                return KeyEventResult.handled;
-              } else if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
-                setState(() => _isCategoryFocused = false);
-                return KeyEventResult.handled;
-              } else if (event.logicalKey == LogicalKeyboardKey.select ||
-                  event.logicalKey == LogicalKeyboardKey.enter) {
-                _changeCategory(_categories[_focusedCategoryIndex]);
-                return KeyEventResult.handled;
+      child: CallbackShortcuts(
+        bindings: <ShortcutActivator, VoidCallback>{
+          const SingleActivator(LogicalKeyboardKey.escape): _handleBackAction,
+          const SingleActivator(LogicalKeyboardKey.goBack): _handleBackAction,
+          const SingleActivator(LogicalKeyboardKey.browserBack):
+              _handleBackAction,
+          const SingleActivator(LogicalKeyboardKey.backspace): _handleBackAction,
+        },
+        child: Focus(
+          autofocus: true,
+          onKeyEvent: (node, event) {
+            if (event is KeyDownEvent) {
+              if (_showChannelSelector) {
+                if (_isCategoryFocused) {
+                  if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+                    _moveCategoryFocus(
+                      (_focusedCategoryIndex - 1 + _categories.length) %
+                          _categories.length,
+                    );
+                    return KeyEventResult.handled;
+                  } else if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+                    _moveCategoryFocus(
+                      (_focusedCategoryIndex + 1) % _categories.length,
+                    );
+                    return KeyEventResult.handled;
+                  } else if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+                    setState(() {
+                      _isCategoryFocused = false;
+                      if (_isTvLayout(context)) {
+                        _categoryPanelVisible = false;
+                      }
+                    });
+                    return KeyEventResult.handled;
+                  } else if (event.logicalKey == LogicalKeyboardKey.select ||
+                      event.logicalKey == LogicalKeyboardKey.enter ||
+                      event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+                    _changeCategory(_categories[_focusedCategoryIndex]);
+                    return KeyEventResult.handled;
+                  }
+                } else {
+                  if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+                    _moveFocus(
+                      (_focusedChannelIndex - 1 + _channels.length) %
+                          _channels.length,
+                    );
+                    return KeyEventResult.handled;
+                  } else if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+                    _moveFocus(
+                      (_focusedChannelIndex + 1) % _channels.length,
+                    );
+                    return KeyEventResult.handled;
+                  } else if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+                    if (_isTvLayout(context) && !_categoryPanelVisible) {
+                      _revealCategoryPanel();
+                    } else {
+                      setState(() => _isCategoryFocused = true);
+                    }
+                    return KeyEventResult.handled;
+                  } else if (event.logicalKey == LogicalKeyboardKey.select ||
+                      event.logicalKey == LogicalKeyboardKey.enter ||
+                      event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+                    _activateFocusedChannel();
+                    return KeyEventResult.handled;
+                  } else if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+                    _closeChannelSelector(showInfo: true);
+                    return KeyEventResult.handled;
+                  }
+                }
+              } else if (_showChannelInfo) {
+                if (_isActivateKey(event.logicalKey)) {
+                  _handleOkPress();
+                  return KeyEventResult.handled;
+                }
+                if (_handleChromeVerticalNav(event.logicalKey)) {
+                  return KeyEventResult.handled;
+                }
+                if (event.logicalKey == LogicalKeyboardKey.arrowLeft ||
+                    event.logicalKey == LogicalKeyboardKey.arrowRight) {
+                  if (_hasBottomChromeFocus) {
+                    return KeyEventResult.ignored;
+                  }
+                  _focusDefaultBottomChromeControl();
+                  return KeyEventResult.handled;
+                }
+              } else {
+                if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+                  unawaited(_switchToChannelByOffset(-1));
+                  return KeyEventResult.handled;
+                }
+                if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+                  unawaited(_switchToChannelByOffset(1));
+                  return KeyEventResult.handled;
+                }
+                if (_isActivateKey(event.logicalKey)) {
+                  _handleOkPress();
+                  return KeyEventResult.handled;
+                }
               }
-            } else {
-              if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
-                _moveFocus((_focusedChannelIndex - 1 + _channels.length) % _channels.length);
-                return KeyEventResult.handled;
-              } else if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
-                _moveFocus((_focusedChannelIndex + 1) % _channels.length);
-                return KeyEventResult.handled;
-              } else if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
-                setState(() => _isCategoryFocused = true);
-                return KeyEventResult.handled;
-              } else if (event.logicalKey == LogicalKeyboardKey.select ||
-                  event.logicalKey == LogicalKeyboardKey.enter) {
-                _activateFocusedChannel();
-                return KeyEventResult.handled;
-              } else if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
-                _closeChannelSelector(showInfo: true);
-                return KeyEventResult.handled;
-              }
-            }
-          } else if (_showChannelInfo) {
-            if (event.logicalKey == LogicalKeyboardKey.select ||
-                event.logicalKey == LogicalKeyboardKey.enter) {
-              _handleOkPress();
-              return KeyEventResult.handled;
-            }
-          } else {
-            if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
-              _switchToPreviousChannel();
-              return KeyEventResult.handled;
-            } else if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
-              _switchToNextChannel();
-              return KeyEventResult.handled;
-            } else if (event.logicalKey == LogicalKeyboardKey.select ||
-                event.logicalKey == LogicalKeyboardKey.enter) {
-              _handleOkPress();
-              return KeyEventResult.handled;
-            }
-          }
 
-          if (_isBackKey(event.logicalKey)) {
-            _handleBackAction();
-            return KeyEventResult.handled;
-          }
-        }
-        return KeyEventResult.ignored;
-      },
-      child: Directionality(
-        textDirection: TextDirection.ltr,
-        child: Scaffold(
-          backgroundColor: Colors.black,
-          body: Stack(
-            children: [
-              Positioned.fill(
-                child: GestureDetector(
-                  onTap: _onPlayerTap,
-                  behavior: HitTestBehavior.opaque,
-                  child: Stack(
-                    children: [
-                      Center(
-                        child: _hasError
-                            ? _buildErrorScreen()
-                            : (_betterPlayerController != null)
-                                ? RepaintBoundary(
-                                    child: BetterPlayer(controller: _betterPlayerController!),
-                                  )
-                                : const Center(
-                                    child: CircularProgressIndicator(color: AppTheme.primaryColor),
+              if (_isBackKey(event.logicalKey)) {
+                _handleBackAction();
+                return KeyEventResult.handled;
+              }
+            }
+            return KeyEventResult.ignored;
+          },
+          child: Directionality(
+            textDirection: TextDirection.ltr,
+            child: Scaffold(
+              backgroundColor: Colors.black,
+              body: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Positioned.fill(
+                    child: _hasError
+                        ? _buildErrorScreen()
+                        : IgnorePointer(
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                SizedBox.expand(child: player.buildView()),
+                                if (player.shouldShowLoading)
+                                  const Center(
+                                    child: CircularProgressIndicator(
+                                      color: AppTheme.primaryColor,
+                                    ),
                                   ),
-                      ),
-                      if (_showAspectHint) _buildAspectRatioHint(),
-                    ],
+                              ],
+                            ),
+                          ),
                   ),
-                ),
+                  if (!_hasError &&
+                      !_showChannelInfo &&
+                      !_showChannelSelector)
+                    Positioned.fill(
+                      child: GestureDetector(
+                        onTap: _onPlayerTap,
+                        behavior: HitTestBehavior.translucent,
+                        child: const SizedBox.expand(),
+                      ),
+                    ),
+                  Positioned.fill(
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        if (_showAspectHint) _buildAspectRatioHint(),
+                        if (_showChannelSelector) ...[
+                          _buildChannelSelector(),
+                          _buildChannelListDismissArea(),
+                        ],
+                        if (!_hasError &&
+                            _showChannelInfo &&
+                            !_showChannelSelector)
+                          _buildPlayerControlsBar(),
+                        if (_showPlayerChrome) _buildTopBackButton(),
+                      ],
+                    ),
+                  ),
+                ],
               ),
-              if (_showChannelSelector) ...[
-                _buildChannelSelector(),
-                _buildChannelListDismissArea(),
-              ],
-              if (!_hasError && _showChannelInfo && !_showChannelSelector)
-                _buildPlayerControlsBar(),
-              if (_showPlayerChrome) _buildTopBackButton(),
-            ],
+            ),
           ),
         ),
       ),
-    ),
     );
   }
 
@@ -807,7 +1029,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
       color: Colors.black,
       child: Stack(
         children: [
-          // Background Artistic Glows
           Positioned(
             top: -150,
             right: -150,
@@ -839,13 +1060,15 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    // Minimalist Logo Presentation
                     Container(
                       width: 140,
                       height: 140,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white.withOpacity(0.05), width: 1),
+                        border: Border.all(
+                          color: Colors.white.withOpacity(0.05),
+                          width: 1,
+                        ),
                       ),
                       padding: const EdgeInsets.all(25),
                       child: Opacity(
@@ -854,7 +1077,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       ),
                     ),
                     const SizedBox(height: 60),
-                    // Sharp Modern Typography
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 24),
                       child: Text(
@@ -862,8 +1084,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
                         style: TextStyle(
                           color: Colors.white,
                           fontSize: 30,
-                          fontWeight: l10n.locale.languageCode == 'ku' ? FontWeight.bold : FontWeight.w200,
-                          letterSpacing: l10n.locale.languageCode == 'ku' ? 0 : 8.0,
+                          fontWeight: l10n.locale.languageCode == 'ku'
+                              ? FontWeight.bold
+                              : FontWeight.w200,
+                          letterSpacing:
+                              l10n.locale.languageCode == 'ku' ? 0 : 8.0,
                           fontFamily: 'K24Kurdish',
                         ),
                         textAlign: TextAlign.center,
@@ -878,22 +1103,75 @@ class _PlayerScreenState extends State<PlayerScreen> {
                           color: Colors.white.withOpacity(0.3),
                           fontSize: 14,
                           fontWeight: FontWeight.w400,
-                          letterSpacing: l10n.locale.languageCode == 'ku' ? 0 : 1.5,
+                          letterSpacing:
+                              l10n.locale.languageCode == 'ku' ? 0 : 1.5,
                           fontFamily: 'K24Kurdish',
                         ),
                         textAlign: TextAlign.center,
                       ),
                     ),
-                    const SizedBox(height: 80),
-                    // Premium Minimal Button
+                    const SizedBox(height: 40),
+                    Focus(
+                      autofocus: true,
+                      onKeyEvent: (node, event) {
+                        if (event is KeyDownEvent &&
+                            (event.logicalKey == LogicalKeyboardKey.select ||
+                                event.logicalKey == LogicalKeyboardKey.enter)) {
+                          unawaited(_retryCurrentChannel());
+                          return KeyEventResult.handled;
+                        }
+                        return KeyEventResult.ignored;
+                      },
+                      child: Builder(
+                        builder: (context) {
+                          final isFocused = Focus.of(context).hasFocus;
+                          return GestureDetector(
+                            onTap: () => unawaited(_retryCurrentChannel()),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 48,
+                                vertical: 18,
+                              ),
+                              decoration: BoxDecoration(
+                                color: isFocused
+                                    ? AppTheme.primaryColor
+                                    : Colors.transparent,
+                                border: Border.all(
+                                  color: isFocused
+                                      ? Colors.white
+                                      : Colors.white.withOpacity(0.15),
+                                  width: isFocused ? 2 : 1,
+                                ),
+                              ),
+                              child: Text(
+                                l10n.translate('error_try_again').toUpperCase(),
+                                style: TextStyle(
+                                  color: isFocused ? Colors.black : Colors.white,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: 3.0,
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 20),
                     Material(
                       color: Colors.transparent,
                       child: InkWell(
-                        onTap: () => Navigator.pop(context),
+                        onTap: _exitPlayer,
                         child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 18),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 48,
+                            vertical: 18,
+                          ),
                           decoration: BoxDecoration(
-                            border: Border.all(color: Colors.white.withOpacity(0.15), width: 1),
+                            border: Border.all(
+                              color: Colors.white.withOpacity(0.15),
+                              width: 1,
+                            ),
                           ),
                           child: Text(
                             l10n.translate('home').toUpperCase(),
@@ -907,7 +1185,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                         ),
                       ),
                     ),
-                    const SizedBox(height: 40), // Bottom padding for scroll
+                    const SizedBox(height: 40),
                   ],
                 ),
               ),
@@ -918,128 +1196,284 @@ class _PlayerScreenState extends State<PlayerScreen> {
     );
   }
 
+  Future<void> _switchToChannelByOffset(int delta) async {
+    if (_channels.length <= 1) return;
+    final nextIndex =
+        (_currentChannelIndex + delta + _channels.length) % _channels.length;
+    await _switchToChannel(_channels[nextIndex]);
+    _showChannelInfoOverlay();
+  }
+
   Widget _buildPlayerControlsBar() {
+    final categoryLabel = _currentChannel.category.trim();
+    final categoryColor = categoryLabel.isNotEmpty
+        ? AppTheme.getCategoryColor(categoryLabel)
+        : AppTheme.textSecondary;
+    final channelPosition = _channels.length > 1
+        ? '${_currentChannelIndex + 1} / ${_channels.length}'
+        : null;
+
     return AnimatedPositioned(
-      duration: const Duration(milliseconds: 300),
-      curve: Curves.easeOut,
+      duration: const Duration(milliseconds: 350),
+      curve: Curves.easeOutCubic,
       bottom: _showChannelInfo ? 0 : -160,
       left: 0,
       right: 0,
-      child: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [Colors.transparent, Colors.black.withOpacity(0.92)],
-          ),
-        ),
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
-        child: SafeArea(
-          top: false,
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              if (_currentChannel.logo.isNotEmpty)
-                Container(
-                  width: 64,
-                  height: 64,
+      child: Material(
+        color: Colors.transparent,
+        elevation: 12,
+        child: IgnorePointer(
+          ignoring: !_showChannelInfo,
+          child: SafeArea(
+            top: false,
+            minimum: const EdgeInsets.fromLTRB(20, 0, 20, 18),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final compact = constraints.maxWidth < 520;
+                return Consumer<ChannelsProvider>(
+                  builder: (context, channelsProvider, _) {
+                    final isFavorite =
+                        channelsProvider.isFavorite(_currentChannel.id);
+                    final l10n = AppLocalizations.of(context);
+                    return Container(
                   decoration: BoxDecoration(
-                    color: Colors.white10,
-                    borderRadius: BorderRadius.circular(12),
+                    color: AppTheme.surfaceColor,
+                    borderRadius: BorderRadius.circular(22),
+                    border: Border.all(color: AppTheme.cardColor),
                   ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(10),
-                    child: ChannelLogo(
-                      logo: _currentChannel.logo,
-                      width: 64,
-                      height: 64,
-                      fit: BoxFit.contain,
-                      fallback: const Icon(Icons.tv, color: Colors.white54, size: 28),
-                    ),
-                  ),
-                ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      _currentChannel.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
+                  child: IntrinsicHeight(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: Colors.red,
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: const Text(
-                            'LIVE',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 11,
-                            ),
-                          ),
+                          width: 4,
+                          color: categoryColor,
                         ),
-                        const SizedBox(width: 10),
-                        Flexible(
-                          child: Text(
-                            _currentChannel.category.toUpperCase(),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Colors.white70,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 13,
+                            Expanded(
+                              child: Padding(
+                                padding: EdgeInsets.fromLTRB(
+                                  compact ? 14 : 18,
+                                  compact ? 14 : 16,
+                                  compact ? 12 : 16,
+                                  compact ? 14 : 16,
+                                ),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.center,
+                                  children: [
+                                    _buildChannelInfoLogo(compact),
+                                    SizedBox(width: compact ? 12 : 16),
+                                    Expanded(
+                                      child: _buildChannelInfoText(
+                                        compact: compact,
+                                        categoryLabel: categoryLabel,
+                                        categoryColor: categoryColor,
+                                        channelPosition: channelPosition,
+                                      ),
+                                    ),
+                                    SizedBox(width: compact ? 8 : 12),
+                                    _buildControlActionButton(
+                                      icon: isFavorite
+                                          ? Icons.favorite_rounded
+                                          : Icons.favorite_border_rounded,
+                                      label: l10n.translate('favorites'),
+                                      compact: compact,
+                                      focusNode: _favoriteFocusNode,
+                                      idleIconColor: isFavorite
+                                          ? AppTheme.accentRed
+                                          : null,
+                                      idleBackgroundColor: isFavorite
+                                          ? AppTheme.accentRed
+                                              .withValues(alpha: 0.14)
+                                          : null,
+                                      onTap: () => _toggleChannelFavorite(
+                                        channelsProvider,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    _buildControlActionButton(
+                                      icon: Icons.aspect_ratio_rounded,
+                                      label: _aspectLabels[_aspectRatioIndex],
+                                      compact: compact,
+                                      focusNode: _aspectRatioFocusNode,
+                                      onTap: () {
+                                        _cycleAspectRatio();
+                                        _startHideChannelInfoTimer();
+                                      },
+                                    ),
+                                    const SizedBox(width: 8),
+                                    _buildControlActionButton(
+                                      icon: Icons.grid_view_rounded,
+                                      label: 'Channels',
+                                      compact: compact,
+                                      focusNode: _channelsFocusNode,
+                                      onTap: _openChannelSelector,
+                                    ),
+                                  ],
+                                ),
+                              ),
                             ),
-                          ),
+                          ],
                         ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              Flexible(
-                fit: FlexFit.loose,
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  alignment: Alignment.centerRight,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _buildControlActionButton(
-                        icon: Icons.aspect_ratio,
-                        label: _aspectLabels[_aspectRatioIndex],
-                        onTap: () {
-                          _cycleAspectRatio();
-                          _startHideChannelInfoTimer();
-                        },
                       ),
-                      const SizedBox(width: 8),
-                      _buildControlActionButton(
-                        icon: Icons.list,
-                        label: 'Channels',
-                        onTap: _openChannelSelector,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
+                    );
+                  },
+                );
+              },
+            ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildChannelInfoLogo(bool compact) {
+    final size = compact ? 54.0 : 72.0;
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: AppTheme.cardColor,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.textTertiary.withValues(alpha: 0.35)),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: _currentChannel.logo.isNotEmpty
+            ? ChannelLogo(
+                logo: _currentChannel.logo,
+                width: size,
+                height: size,
+                fit: BoxFit.cover,
+                memCacheWidth: 220,
+                fallback: Icon(Icons.live_tv_rounded, color: Colors.white54, size: size * 0.42),
+              )
+            : Center(
+                child: Icon(Icons.live_tv_rounded, color: Colors.white54, size: size * 0.42),
+              ),
+      ),
+    );
+  }
+
+  Widget _buildChannelInfoText({
+    required bool compact,
+    required String categoryLabel,
+    required Color categoryColor,
+    required String? channelPosition,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          children: [
+            _buildLiveBadge(),
+            if (channelPosition != null) ...[
+              const SizedBox(width: 8),
+              _buildMetaChip(
+                icon: Icons.swap_vert_rounded,
+                label: channelPosition,
+                color: AppTheme.textSecondary,
+              ),
+            ],
+          ],
+        ),
+        const SizedBox(height: 8),
+        Text(
+          _currentChannel.name,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: compact ? 19 : 24,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 0.2,
+            height: 1.1,
+          ),
+        ),
+        if (categoryLabel.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          _buildMetaChip(
+            icon: Icons.category_rounded,
+            label: categoryLabel.toUpperCase(),
+            color: categoryColor,
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildLiveBadge() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: AppTheme.accentRed.withValues(alpha: 0.18),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: AppTheme.accentRed.withValues(alpha: 0.55)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 7,
+            height: 7,
+            decoration: BoxDecoration(
+              color: AppTheme.accentRed,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: AppTheme.accentRed.withValues(alpha: 0.75),
+                  blurRadius: 8,
+                  spreadRadius: 1,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 6),
+          const Text(
+            'LIVE',
+            style: TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w800,
+              fontSize: 11,
+              letterSpacing: 1.1,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMetaChip({
+    required IconData icon,
+    required String label,
+    required Color color,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: 0.28)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: color.withValues(alpha: 0.95)),
+          const SizedBox(width: 5),
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.92),
+                fontWeight: FontWeight.w700,
+                fontSize: 11,
+                letterSpacing: 0.6,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1048,13 +1482,30 @@ class _PlayerScreenState extends State<PlayerScreen> {
     required IconData icon,
     required String label,
     required VoidCallback onTap,
+    bool compact = false,
+    FocusNode? focusNode,
+    Color? idleIconColor,
+    Color? idleBackgroundColor,
   }) {
     return Focus(
+      focusNode: focusNode,
+      canRequestFocus: true,
       onKeyEvent: (node, event) {
-        if (event is KeyDownEvent &&
-            (event.logicalKey == LogicalKeyboardKey.select ||
-                event.logicalKey == LogicalKeyboardKey.enter)) {
+        if (event is! KeyDownEvent) {
+          return KeyEventResult.ignored;
+        }
+        if (event.logicalKey == LogicalKeyboardKey.select ||
+            event.logicalKey == LogicalKeyboardKey.enter ||
+            event.logicalKey == LogicalKeyboardKey.numpadEnter ||
+            event.logicalKey == LogicalKeyboardKey.space ||
+            event.logicalKey == LogicalKeyboardKey.gameButtonA) {
           onTap();
+          return KeyEventResult.handled;
+        }
+        if (_handleChromeVerticalNav(event.logicalKey)) {
+          return KeyEventResult.handled;
+        }
+        if (_handleChromeHorizontalNav(event.logicalKey)) {
           return KeyEventResult.handled;
         }
         return KeyEventResult.ignored;
@@ -1062,35 +1513,43 @@ class _PlayerScreenState extends State<PlayerScreen> {
       child: Builder(
         builder: (context) {
           final isFocused = Focus.of(context).hasFocus;
+          final contentColor =
+              isFocused ? Colors.black : (idleIconColor ?? Colors.white);
           return GestureDetector(
             onTap: onTap,
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 200),
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              curve: Curves.easeOutCubic,
+              padding: EdgeInsets.symmetric(
+                horizontal: compact ? 10 : 14,
+                vertical: compact ? 10 : 12,
+              ),
               decoration: BoxDecoration(
                 color: isFocused
-                    ? AppTheme.primaryColor.withOpacity(0.9)
-                    : Colors.black.withOpacity(0.55),
-                borderRadius: BorderRadius.circular(8),
+                    ? Colors.white
+                    : (idleBackgroundColor ?? AppTheme.cardColor),
+                borderRadius: BorderRadius.circular(14),
                 border: Border.all(
-                  color: isFocused ? Colors.white : Colors.white24,
-                  width: isFocused ? 2 : 1,
+                  color: isFocused ? Colors.white : AppTheme.textTertiary,
+                  width: isFocused ? 2.5 : 1,
                 ),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(icon, color: Colors.white, size: 18),
-                  const SizedBox(width: 8),
-                  Text(
-                    label,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 13,
-                      letterSpacing: 0.4,
+                  Icon(icon, color: contentColor, size: compact ? 17 : 18),
+                  if (!compact) ...[
+                    const SizedBox(width: 8),
+                    Text(
+                      label,
+                      style: TextStyle(
+                        color: contentColor,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 12,
+                        letterSpacing: 0.5,
+                      ),
                     ),
-                  ),
+                  ],
                 ],
               ),
             ),
@@ -1126,11 +1585,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
     );
   }
 
-  static const double _channelListWidth = 420;
+  static const double _channelListWidthFull = 420;
+  static const double _channelListWidthCompact = 300;
+  static const Color _channelListBackground = Color(0xFF141414);
 
   Widget _buildChannelListDismissArea() {
     return Positioned(
-      left: _channelListWidth,
+      left: _channelSelectorWidth(context),
       top: 0,
       right: 0,
       bottom: 0,
@@ -1143,147 +1604,198 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   Widget _buildChannelSelector() {
+    final isTv = _isTvLayout(context);
+    final showCategories = !isTv || _categoryPanelVisible;
+    final showCategoryHint = isTv && !_categoryPanelVisible;
+    final l10n = AppLocalizations.of(context);
+
     return Positioned(
       left: 0,
       top: 0,
       bottom: 0,
-      width: _channelListWidth,
-      child: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.centerLeft,
-            end: Alignment.centerRight,
-            colors: [
-              Colors.black.withOpacity(0.97),
-              Colors.black.withOpacity(0.92),
-              Colors.black.withOpacity(0.55),
-              Colors.transparent,
-            ],
-            stops: const [0.0, 0.65, 0.88, 1.0],
-          ),
-        ),
-        child: SafeArea(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              SizedBox(
-                width: 140,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Padding(
-                      padding: EdgeInsets.fromLTRB(16, 12, 8, 10),
-                      child: Text(
-                        'CATEGORIES',
-                        style: TextStyle(
-                          color: Colors.white38,
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 1.4,
-                        ),
-                      ),
-                    ),
-                    Expanded(
-                      child: ListView.builder(
-                        controller: _categoryScrollController,
-                        padding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
-                        itemCount: _categories.length,
-                        itemBuilder: (context, index) {
-                          final category = _categories[index];
-                          final isFocused = _isCategoryFocused && index == _focusedCategoryIndex;
-                          final isSelected = category == _selectedCategory;
-                          return _buildCategoryItem(category, isFocused, isSelected, index);
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Container(width: 1, color: Colors.white12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
-                      child: Row(
-                        children: [
-                          Container(
-                            width: 4,
-                            height: 18,
-                            decoration: BoxDecoration(
-                              color: AppTheme.primaryColor,
-                              borderRadius: BorderRadius.circular(2),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
+        width: _channelSelectorWidth(context),
+        child: Container(
+          color: _channelListBackground,
+          child: SafeArea(
+            left: false,
+            right: false,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (showCategoryHint) _buildCategoryRevealHint(l10n),
+                if (showCategories) ...[
+                  Expanded(
+                    flex: 2,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(10, 12, 6, 10),
+                          child: Text(
+                            l10n.translate('categories').toUpperCase(),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 1.4,
                             ),
                           ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              _selectedCategory,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 15,
-                                fontWeight: FontWeight.w900,
-                                letterSpacing: 0.8,
+                        ),
+                        Expanded(
+                          child: ListView.builder(
+                            controller: _categoryScrollController,
+                            padding: const EdgeInsets.fromLTRB(6, 0, 6, 12),
+                            itemCount: _categories.length,
+                            itemBuilder: (context, index) {
+                              final category = _categories[index];
+                              final isFocused = _isCategoryFocused &&
+                                  index == _focusedCategoryIndex;
+                              final isSelected = category == _selectedCategory;
+                              return _buildCategoryItem(
+                                category,
+                                isFocused,
+                                isSelected,
+                                index,
+                              );
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Container(width: 1, color: Colors.white24),
+                ],
+                Expanded(
+                  flex: showCategories ? 3 : 1,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 4,
+                              height: 18,
+                              decoration: BoxDecoration(
+                                color: AppTheme.primaryColor,
+                                borderRadius: BorderRadius.circular(2),
                               ),
                             ),
-                          ),
-                        ],
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                _selectedCategory,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w900,
+                                  letterSpacing: 0.8,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                    Expanded(
-                      child: ListView.builder(
-                        controller: _channelScrollController,
-                        padding: const EdgeInsets.fromLTRB(8, 0, 12, 12),
-                        itemCount: _channels.length,
-                        itemBuilder: (context, index) {
-                          final channel = _channels[index];
-                          final isFocused = !_isCategoryFocused && index == _focusedChannelIndex;
-                          final isPlaying = channel.id == _currentChannel.id;
+                      Expanded(
+                        child: ListView.builder(
+                          controller: _channelScrollController,
+                          padding: const EdgeInsets.fromLTRB(8, 0, 12, 12),
+                          itemCount: _channels.length,
+                          itemBuilder: (context, index) {
+                            final channel = _channels[index];
+                            final isFocused = !_isCategoryFocused &&
+                                index == _focusedChannelIndex;
 
-                          return GestureDetector(
-                            onTap: () {
-                              if (_isCategoryFocused) {
-                                setState(() => _isCategoryFocused = false);
-                              }
-                              _moveFocus(index);
-                              _activateFocusedChannel();
-                            },
-                            child: _buildChannelItem(channel, isFocused, isPlaying),
-                          );
-                        },
+                            return GestureDetector(
+                              onTap: () {
+                                if (_isCategoryFocused) {
+                                  setState(() => _isCategoryFocused = false);
+                                }
+                                _moveFocus(index);
+                                _activateFocusedChannel();
+                              },
+                              child: _buildChannelItem(channel, isFocused),
+                            );
+                          },
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
     );
   }
 
-  Widget _buildCategoryItem(String category, bool isFocused, bool isSelected, int index) {
+  Widget _buildCategoryRevealHint(AppLocalizations l10n) {
+    return Container(
+      width: 40,
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.04),
+        border: const Border(
+          right: BorderSide(color: Colors.white24),
+        ),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.chevron_left_rounded,
+            color: Colors.white.withOpacity(0.55),
+            size: 22,
+          ),
+          const SizedBox(height: 10),
+          RotatedBox(
+            quarterTurns: 3,
+            child: Text(
+              l10n.translate('categories').toUpperCase(),
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.45),
+                fontSize: 9,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1.1,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCategoryItem(
+    String category,
+    bool isFocused,
+    bool isSelected,
+    int index,
+  ) {
+    final highlighted = isFocused || isSelected;
     return GestureDetector(
       onTap: () {
         _moveCategoryFocus(index);
         _changeCategory(category);
       },
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
+        duration: const Duration(milliseconds: 180),
+        width: double.infinity,
         height: 48,
         margin: const EdgeInsets.only(bottom: 6),
-        padding: const EdgeInsets.symmetric(horizontal: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 10),
         decoration: BoxDecoration(
-          color: isFocused
-              ? AppTheme.primaryColor
-              : (isSelected ? AppTheme.primaryColor.withOpacity(0.35) : Colors.white10),
+          color: isFocused ? Colors.white : Colors.transparent,
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
-            color: isFocused ? Colors.white : (isSelected ? AppTheme.primaryColor : Colors.transparent),
+            color: isFocused
+                ? Colors.white
+                : (isSelected ? Colors.white54 : Colors.white24),
             width: isFocused ? 2 : 1,
           ),
         ),
@@ -1293,7 +1805,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
               width: 3,
               height: 18,
               decoration: BoxDecoration(
-                color: isFocused || isSelected ? Colors.redAccent : Colors.white24,
+                color: highlighted
+                    ? (isFocused ? Colors.black87 : Colors.white)
+                    : Colors.white38,
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
@@ -1304,8 +1818,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: isFocused || isSelected ? FontWeight.w900 : FontWeight.w600,
+                  color: isFocused ? Colors.black : Colors.white,
+                  fontWeight: highlighted ? FontWeight.w900 : FontWeight.w600,
                   fontSize: 13,
                   letterSpacing: 0.4,
                 ),
@@ -1317,19 +1831,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
     );
   }
 
-  Widget _buildChannelItem(Channel channel, bool isFocused, bool isPlaying) {
+  Widget _buildChannelItem(Channel channel, bool isFocused) {
     return AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
+      duration: const Duration(milliseconds: 180),
       height: 66,
       margin: const EdgeInsets.only(bottom: 6),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
-        color: isFocused ? Colors.white.withOpacity(0.12) : Colors.transparent,
+        color: isFocused ? Colors.white : Colors.transparent,
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
-          color: isFocused
-              ? AppTheme.primaryColor
-              : (isPlaying ? AppTheme.primaryColor.withOpacity(0.35) : Colors.white10),
+          color: isFocused ? Colors.white : Colors.white24,
           width: isFocused ? 2 : 1,
         ),
       ),
@@ -1339,8 +1851,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
             width: 48,
             height: 48,
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: isFocused ? Colors.grey.shade100 : Colors.white,
               borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: isFocused ? Colors.black12 : Colors.transparent,
+              ),
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(8),
@@ -1349,52 +1864,26 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 width: 48,
                 height: 48,
                 fit: BoxFit.contain,
-                fallback: const Icon(Icons.tv, color: Colors.grey, size: 24),
+                fallback: Icon(
+                  Icons.tv,
+                  color: isFocused ? Colors.black45 : Colors.grey,
+                  size: 24,
+                ),
               ),
             ),
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  channel.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: isFocused ? Colors.white : Colors.white70,
-                    fontSize: 14,
-                    fontWeight: isFocused ? FontWeight.bold : FontWeight.w500,
-                  ),
-                ),
-                if (isPlaying) ...[
-                  const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      Container(
-                        width: 6,
-                        height: 6,
-                        decoration: const BoxDecoration(
-                          color: Colors.redAccent,
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      const Text(
-                        'NOW PLAYING',
-                        style: TextStyle(
-                          color: Colors.redAccent,
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 0.6,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ],
+            child: Text(
+              channel.name,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: isFocused ? Colors.black : Colors.white,
+                fontSize: 14,
+                fontWeight: isFocused ? FontWeight.w800 : FontWeight.w600,
+                height: 1.2,
+              ),
             ),
           ),
         ],
@@ -1402,3 +1891,4 @@ class _PlayerScreenState extends State<PlayerScreen> {
     );
   }
 }
+

@@ -1,6 +1,7 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import '../config/app_theme.dart';
+import 'nav_bar_icon.dart';
 
 class CustomBottomNav extends StatelessWidget {
   final int currentIndex;
@@ -12,11 +13,21 @@ class CustomBottomNav extends StatelessWidget {
     required this.onTap,
   });
 
+  static const _items = <_BottomNavItem>[
+    _BottomNavItem(assetPath: NavBarAssets.home, label: 'Home'),
+    _BottomNavItem(icon: Icons.sensors_rounded, label: 'Live'),
+    _BottomNavItem(icon: Icons.movie_filter_rounded, label: 'Movies'),
+    _BottomNavItem(assetPath: NavBarAssets.tvShow, label: 'Shows'),
+    _BottomNavItem(icon: Icons.graphic_eq_rounded, label: 'Wave'),
+    _BottomNavItem(assetPath: NavBarAssets.search, label: 'Search'),
+    _BottomNavItem(assetPath: NavBarAssets.settings, label: 'Settings'),
+  ];
+
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-      height: 64,
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 20),
+      height: 60,
       decoration: BoxDecoration(
         color: const Color(0xFF121212).withOpacity(0.8),
         borderRadius: BorderRadius.circular(32),
@@ -38,14 +49,10 @@ class CustomBottomNav extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 4),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: [
-                _buildItem(0, Icons.explore_rounded, 'Home'),
-                _buildItem(1, Icons.sensors_rounded, 'Live'),
-                _buildItem(2, Icons.movie_filter_rounded, 'Movies'),
-                _buildItem(3, Icons.slideshow_rounded, 'Shows'),
-                _buildItem(4, Icons.manage_search_rounded, 'Search'),
-                _buildItem(5, Icons.tune_rounded, 'Settings'),
-              ],
+              children: List.generate(
+                _items.length,
+                (index) => _buildItem(index, _items[index]),
+              ),
             ),
           ),
         ),
@@ -53,9 +60,9 @@ class CustomBottomNav extends StatelessWidget {
     );
   }
 
-  Widget _buildItem(int index, IconData icon, String label) {
+  Widget _buildItem(int index, _BottomNavItem item) {
     final isSelected = currentIndex == index;
-    
+
     return Expanded(
       child: GestureDetector(
         onTap: () => onTap(index),
@@ -66,15 +73,18 @@ class CustomBottomNav extends StatelessWidget {
             AnimatedContainer(
               duration: const Duration(milliseconds: 300),
               curve: Curves.easeOutCubic,
-              padding: const EdgeInsets.all(8),
+              padding: const EdgeInsets.all(6),
               decoration: BoxDecoration(
-                color: isSelected ? AppTheme.primaryColor.withOpacity(0.1) : Colors.transparent,
+                color: isSelected
+                    ? AppTheme.primaryColor.withOpacity(0.1)
+                    : Colors.transparent,
                 shape: BoxShape.circle,
               ),
-              child: Icon(
-                icon,
-                color: isSelected ? AppTheme.primaryColor : Colors.white54,
-                size: isSelected ? 24 : 22,
+              child: NavBarIcon(
+                assetPath: item.assetPath,
+                icon: item.icon,
+                isSelected: isSelected,
+                size: isSelected ? 22 : 20,
               ),
             ),
             if (isSelected)
@@ -94,4 +104,16 @@ class CustomBottomNav extends StatelessWidget {
       ),
     );
   }
+}
+
+class _BottomNavItem {
+  final String? assetPath;
+  final IconData? icon;
+  final String label;
+
+  const _BottomNavItem({
+    this.assetPath,
+    this.icon,
+    required this.label,
+  });
 }

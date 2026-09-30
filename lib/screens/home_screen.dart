@@ -89,7 +89,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(width: AppTheme.spacingM),
             const Text(
-              'Live Wave',
+              'WAVE',
               style: TextStyle(
                 fontSize: 22,
                 fontWeight: FontWeight.w600,
@@ -165,7 +165,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildChannelGrid(List<Channel> channels) {
     final crossAxisCount = _isTVMode ? 6 : 2;
-    final childAspectRatio = _isTVMode ? 1.4 : 0.85;
+    final childAspectRatio = 1.0;
     final spacing = _isTVMode ? AppTheme.spacingL : AppTheme.mobileGridSpacing;
 
     return GridView.builder(

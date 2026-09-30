@@ -8,6 +8,9 @@ class SearchBarWidget extends StatefulWidget {
   final String hintText;
   final VoidCallback onSearch;
   final FocusNode? focusNode;
+  final VoidCallback? onMoveToResults;
+  final VoidCallback? onMoveToSidebar;
+  final bool isRtl;
 
   const SearchBarWidget({
     super.key,
@@ -15,6 +18,9 @@ class SearchBarWidget extends StatefulWidget {
     required this.hintText,
     required this.onSearch,
     this.focusNode,
+    this.onMoveToResults,
+    this.onMoveToSidebar,
+    this.isRtl = false,
   });
 
   @override
@@ -24,17 +30,21 @@ class SearchBarWidget extends StatefulWidget {
 class _SearchBarWidgetState extends State<SearchBarWidget> {
   bool _isFocused = false;
   late FocusNode _internalFocusNode;
+  FocusOnKeyEventCallback? _previousKeyHandler;
 
   @override
   void initState() {
     super.initState();
     _internalFocusNode = widget.focusNode ?? FocusNode();
     _internalFocusNode.addListener(_onFocusChange);
+    _previousKeyHandler = _internalFocusNode.onKeyEvent;
+    _internalFocusNode.onKeyEvent = _handleKeyEvent;
   }
 
   @override
   void dispose() {
     _internalFocusNode.removeListener(_onFocusChange);
+    _internalFocusNode.onKeyEvent = _previousKeyHandler;
     if (widget.focusNode == null) {
       _internalFocusNode.dispose();
     }
@@ -49,31 +59,31 @@ class _SearchBarWidgetState extends State<SearchBarWidget> {
     }
   }
 
+  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is KeyDownEvent) {
+      if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+        widget.onMoveToResults?.call();
+        return KeyEventResult.handled;
+      }
+      if (event.logicalKey == LogicalKeyboardKey.arrowLeft && !widget.isRtl) {
+        widget.onMoveToSidebar?.call();
+        return KeyEventResult.handled;
+      }
+      if (event.logicalKey == LogicalKeyboardKey.arrowRight && widget.isRtl) {
+        widget.onMoveToSidebar?.call();
+        return KeyEventResult.handled;
+      }
+    }
+    return _previousKeyHandler?.call(node, event) ?? KeyEventResult.ignored;
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Focus(
-      onKeyEvent: (node, event) {
-        if (event is KeyDownEvent) {
-          if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
-            // Move focus to the results grid
-            FocusScope.of(context).nextFocus();
-            return KeyEventResult.handled;
-          } else if (event.logicalKey == LogicalKeyboardKey.select ||
-              event.logicalKey == LogicalKeyboardKey.enter) {
-            // Activate text field on Select/Enter
-            _internalFocusNode.requestFocus();
-             // Manually show keyboard if needed, though requestFocus usually does it
-             // SystemChannels.textInput.invokeMethod('TextInput.show');
-            return KeyEventResult.ignored; // Let the TextField handle it too if needed
-          }
-        }
-        return KeyEventResult.ignored;
+    return GestureDetector(
+      onTap: () {
+        _internalFocusNode.requestFocus();
       },
-      child: GestureDetector(
-        onTap: () {
-          _internalFocusNode.requestFocus();
-        },
-        child: AnimatedContainer(
+      child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
           padding: const EdgeInsets.symmetric(horizontal: 4),
           decoration: BoxDecoration(
@@ -120,15 +130,17 @@ class _SearchBarWidgetState extends State<SearchBarWidget> {
                   textInputAction: TextInputAction.search,
                   onSubmitted: (_) {
                     widget.onSearch();
-                    // Automatically move focus to results when done typing
-                    FocusScope.of(context).nextFocus();
+                    widget.onMoveToResults?.call();
                   },
                 ),
               ),
               Padding(
                 padding: const EdgeInsets.all(4),
                 child: ElevatedButton(
-                  onPressed: widget.onSearch,
+                  onPressed: () {
+                    widget.onSearch();
+                    widget.onMoveToResults?.call();
+                  },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppTheme.primaryColor,
                     foregroundColor: AppTheme.backgroundColor,
@@ -153,7 +165,6 @@ class _SearchBarWidgetState extends State<SearchBarWidget> {
             ],
           ),
         ),
-      ),
-    );
+      );
   }
 }

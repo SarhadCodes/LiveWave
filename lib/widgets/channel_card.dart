@@ -3,7 +3,6 @@ import 'package:flutter/services.dart';
 import '../widgets/channel_logo.dart';
 import '../models/channel.dart';
 import '../config/app_theme.dart';
-import 'category_badge.dart';
 
 class ChannelCard extends StatefulWidget {
   final Channel channel;
@@ -25,49 +24,24 @@ class ChannelCard extends StatefulWidget {
   State<ChannelCard> createState() => _ChannelCardState();
 }
 
-class _ChannelCardState extends State<ChannelCard>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _animationController;
-  late Animation<double> _scaleAnimation;
+class _ChannelCardState extends State<ChannelCard> {
   bool _isFocused = false;
 
   @override
   void initState() {
     super.initState();
-    _animationController = AnimationController(
-      duration: const Duration(milliseconds: 200),
-      vsync: this,
-    );
-    _scaleAnimation = Tween<double>(
-      begin: 1.0,
-      end: AppTheme.tvFocusScale,
-    ).animate(CurvedAnimation(
-      parent: _animationController,
-      curve: Curves.easeInOut,
-    ));
-
     widget.focusNode?.addListener(_onFocusChange);
   }
 
   @override
   void dispose() {
     widget.focusNode?.removeListener(_onFocusChange);
-    _animationController.dispose();
     super.dispose();
   }
 
   void _onFocusChange() {
-    if (widget.focusNode?.hasFocus ?? false) {
-      if (mounted) {
-        setState(() => _isFocused = true);
-        _animationController.forward();
-      }
-    } else {
-      if (mounted) {
-        setState(() => _isFocused = false);
-        _animationController.reverse();
-      }
-    }
+    if (!mounted) return;
+    setState(() => _isFocused = widget.focusNode?.hasFocus ?? false);
   }
 
   @override
@@ -78,7 +52,6 @@ class _ChannelCardState extends State<ChannelCard>
       return Focus(
         focusNode: widget.focusNode,
         onKeyEvent: (node, event) {
-          // Handle Enter/Select key press for TV remote
           if (event is KeyDownEvent) {
             if (event.logicalKey == LogicalKeyboardKey.select ||
                 event.logicalKey == LogicalKeyboardKey.enter) {
@@ -90,16 +63,7 @@ class _ChannelCardState extends State<ChannelCard>
         },
         child: GestureDetector(
           onTap: widget.onTap,
-          child: AnimatedBuilder(
-            animation: _scaleAnimation,
-            builder: (context, child) {
-              return Transform.scale(
-                scale: _scaleAnimation.value,
-                child: child,
-              );
-            },
-            child: card,
-          ),
+          child: card,
         ),
       );
     }
@@ -111,131 +75,105 @@ class _ChannelCardState extends State<ChannelCard>
   }
 
   Widget _buildCard() {
-    return Container(
+    final focused = _isFocused && widget.isTVMode;
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(AppTheme.radiusM),
-        boxShadow: _isFocused && widget.isTVMode
+        border: Border.all(
+          color: focused
+              ? AppTheme.focusColor
+              : AppTheme.textTertiary.withValues(alpha: 0.15),
+          width: focused ? 3 : 1,
+        ),
+        boxShadow: focused
             ? [
                 BoxShadow(
-                  color: AppTheme.focusGlow,
-                  blurRadius: 24,
-                  spreadRadius: 3,
-                ),
-                BoxShadow(
-                  color: AppTheme.primaryColor.withOpacity(0.4),
-                  blurRadius: 16,
+                  color: Colors.white.withValues(alpha: 0.25),
+                  blurRadius: 14,
                   spreadRadius: 1,
                 ),
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.6),
-                  blurRadius: 20,
-                  offset: const Offset(0, 10),
+                  color: Colors.black.withValues(alpha: 0.45),
+                  blurRadius: 18,
+                  offset: const Offset(0, 8),
                 ),
               ]
             : [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.5),
-                  blurRadius: 16,
-                  offset: const Offset(0, 6),
+                  color: Colors.black.withValues(alpha: 0.35),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
                 ),
               ],
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(AppTheme.radiusM),
+        borderRadius: BorderRadius.circular(AppTheme.radiusM - 1),
         child: Stack(
           fit: StackFit.expand,
           children: [
-            // Full Background Logo/Image
-            Container(
-              color: AppTheme.cardColor,
-              child: ChannelLogo(
-                logo: widget.channel.logo,
-                width: double.infinity,
-                height: double.infinity,
-                fit: BoxFit.cover,
-                memCacheWidth: 200,
-                fallback: Container(
-                  color: AppTheme.surfaceColor,
-                  child: Icon(
-                    Icons.tv_rounded,
-                    size: 32,
-                    color: AppTheme.textTertiary.withOpacity(0.3),
-                  ),
+            ChannelLogo(
+              logo: widget.channel.logo,
+              width: double.infinity,
+              height: double.infinity,
+              fit: BoxFit.cover,
+              memCacheWidth: 400,
+              fallback: Container(
+                color: AppTheme.surfaceColor,
+                child: Icon(
+                  Icons.tv_rounded,
+                  size: 36,
+                  color: AppTheme.textTertiary.withValues(alpha: 0.35),
                 ),
               ),
             ),
-            
-            // Bottom Gradient Overlay for Text Readability
             Positioned(
               left: 0,
               right: 0,
               bottom: 0,
-              height: 80, // Height of the gradient area
-              child: Container(
+              child: DecoratedBox(
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
                     colors: [
                       Colors.transparent,
-                      Colors.black.withOpacity(0.9),
+                      Colors.black.withValues(alpha: 0.75),
+                      Colors.black.withValues(alpha: 0.92),
                     ],
                   ),
                 ),
-              ),
-            ),
-            
-            // Focus Border
-            if (_isFocused && widget.isTVMode)
-              Container(
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(AppTheme.radiusM),
-                  border: Border.all(
-                    color: AppTheme.focusColor,
-                    width: 3,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(10, 18, 10, 8),
+                  child: Text(
+                    widget.channel.name,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      height: 1.1,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
               ),
-            
-            // Channel Name at Bottom Left
-            Positioned(
-              bottom: 6,
-              left: 6,
-              right: 6,
-              child: Text(
-                widget.channel.name,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 10,
-                  fontWeight: FontWeight.w800,
-                  shadows: [
-                    Shadow(
-                      color: Colors.black,
-                      blurRadius: 4,
-                      offset: Offset(0, 1),
-                    ),
-                  ],
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
             ),
-
-            // Favorite Icon Overlay (Top Right)
             if (widget.isFavorite)
               Positioned(
                 top: 8,
                 right: 8,
                 child: Container(
-                  padding: const EdgeInsets.all(2),
+                  padding: const EdgeInsets.all(3),
                   decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.6),
+                    color: Colors.black.withValues(alpha: 0.65),
                     shape: BoxShape.circle,
                   ),
                   child: const Icon(
                     Icons.favorite_rounded,
                     color: AppTheme.accentRed,
-                    size: 12,
+                    size: 14,
                   ),
                 ),
               ),

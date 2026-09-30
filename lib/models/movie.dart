@@ -9,7 +9,7 @@ class Movie {
   final int voteCount;
   final List<int> genreIds;
   final double popularity;
-  /// Direct play URL when loaded from Xtream Codes VOD.
+  /// Direct play URL when loaded from Xtream Codes VOD or Telegram ingest.
   final String? streamUrl;
   /// Xtream / M3U category name.
   final String? categoryName;
@@ -56,6 +56,27 @@ class Movie {
       popularity: (1000 - order).toDouble(),
       streamUrl: streamUrl,
       categoryName: categoryName,
+    );
+  }
+
+  factory Movie.fromTelegram(Map<String, dynamic> json) {
+    final genres = (json['genres'] as List?)?.map((e) => e.toString()).toList() ?? const <String>[];
+    final mappedIds = genres.map(genreIdForName).whereType<int>().toList();
+    final poster = (json['posterUrl'] ?? '').toString();
+    final year = json['year'];
+    return Movie(
+      id: json['id'] ?? 0,
+      title: (json['title'] ?? json['originalTitle'] ?? 'Untitled').toString(),
+      overview: (json['description'] ?? '').toString(),
+      posterPath: poster,
+      backdropPath: poster,
+      releaseDate: year != null ? '$year-01-01' : '',
+      voteAverage: (json['rating'] is num) ? (json['rating'] as num).toDouble() : 0,
+      voteCount: 0,
+      genreIds: mappedIds,
+      popularity: 950,
+      streamUrl: (json['playUrl'] ?? '').toString(),
+      categoryName: 'WAVE',
     );
   }
 
@@ -126,5 +147,12 @@ class Movie {
         .where((name) => name != null)
         .cast<String>()
         .toList();
+  }
+
+  static int? genreIdForName(String name) {
+    for (final entry in genreMap.entries) {
+      if (entry.value.toLowerCase() == name.toLowerCase()) return entry.key;
+    }
+    return null;
   }
 }

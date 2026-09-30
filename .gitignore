@@ -43,3 +43,19 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Local Wave / YouTube API key — never commit
+lib/config/wave_local.dart
+
+# Telegram ingest worker secrets and local data
+telegram_ingest/.env
+telegram_ingest/node_modules/
+telegram_ingest/data/wave.db
+telegram_ingest/data/wave.db-wal
+telegram_ingest/data/wave.db-shm
+telegram_ingest/data/thumbs/
+telegram_ingest/data/videos/
+telegram_ingest/*.session
+
+# Local Android/Kotlin build caches
+android/.kotlin/

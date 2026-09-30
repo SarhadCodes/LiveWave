@@ -22,6 +22,18 @@ class _M3uEntry {
   });
 }
 
+class XtreamEpisodeInfo {
+  final int streamId;
+  final String url;
+  final String title;
+
+  const XtreamEpisodeInfo({
+    required this.streamId,
+    required this.url,
+    required this.title,
+  });
+}
+
 class XtreamService {
   static const _userAgents = [
     'IPTV Smarters Pro',
@@ -448,7 +460,7 @@ class XtreamService {
     final shows = <TvShow>[];
     for (var i = 0; i < streams.length; i++) {
       final item = streams[i];
-      final seriesId = _parseInt(item['series_id']);
+      final seriesId = _parseInt(item['series_id']) ?? _parseInt(item['id']);
       if (seriesId == null) continue;
 
       final categoryId = item['category_id']?.toString() ?? '';
@@ -556,64 +568,110 @@ class XtreamService {
     }).toList();
   }
 
-  Future<Map<int, Map<int, String>>> getSeriesEpisodes(int seriesId) async {
+  Future<Map<int, Map<int, XtreamEpisodeInfo>>> getSeriesEpisodes(int seriesId) async {
     await _ensureCredentials();
 
     Object? lastError;
     for (final base in _apiBasesToTry()) {
-      try {
-        final creds = _credentials.withBaseUrl(base);
-        final uri = Uri.parse('${creds.baseUrl}/player_api.php').replace(
-          queryParameters: {
-            'username': creds.username,
-            'password': creds.password,
-            'action': 'get_series_info',
-            'series_id': seriesId.toString(),
-          },
-        );
+      for (final idParam in ['series_id', 'series']) {
+        try {
+          final creds = _credentials.withBaseUrl(base);
+          final uri = Uri.parse('${creds.baseUrl}/player_api.php').replace(
+            queryParameters: {
+              'username': creds.username,
+              'password': creds.password,
+              'action': 'get_series_info',
+              idParam: seriesId.toString(),
+            },
+          );
 
-        final response = await http.get(uri, headers: _headersForAttempt(0)).timeout(
-          const Duration(seconds: 20),
-        );
-        if (response.statusCode != 200) {
-          throw Exception('Failed to load series info (HTTP ${response.statusCode})');
-        }
+          final response = await http.get(uri, headers: _headersForAttempt(0)).timeout(
+            const Duration(seconds: 20),
+          );
+          if (response.statusCode != 200) {
+            throw Exception('Failed to load series info (HTTP ${response.statusCode})');
+          }
 
-        final decoded = _decodeJson(response.body);
-        if (decoded is! Map) throw Exception('Invalid series info response');
+          final decoded = _decodeJson(response.body);
+          if (decoded is! Map) throw Exception('Invalid series info response');
 
-        final map = Map<String, dynamic>.from(decoded);
-        final episodes = map['episodes'];
-        if (episodes is! Map) {
+          final map = Map<String, dynamic>.from(decoded);
+          final parsed = _parseSeriesEpisodes(map, creds);
+          if (parsed.isNotEmpty) return parsed;
+
           _throwIfAuthFailed(map, creds);
-          return {};
+        } catch (e) {
+          lastError = e;
         }
-
-        final result = <int, Map<int, String>>{};
-        episodes.forEach((seasonKey, seasonValue) {
-          final season = int.tryParse(seasonKey.toString());
-          if (season == null || seasonValue is! Map) return;
-
-          final seasonEpisodes = <int, String>{};
-          seasonValue.forEach((episodeKey, episodeValue) {
-            if (episodeValue is! Map) return;
-            final episode = int.tryParse(episodeKey.toString());
-            final episodeId = _parseInt(episodeValue['id']);
-            if (episode == null || episodeId == null) return;
-            seasonEpisodes[episode] =
-                _seriesStreamUrl(Map<String, dynamic>.from(episodeValue), episodeId, creds);
-          });
-
-          if (seasonEpisodes.isNotEmpty) result[season] = seasonEpisodes;
-        });
-
-        return result;
-      } catch (e) {
-        lastError = e;
       }
     }
 
     throw Exception('Failed to load series episodes: $lastError');
+  }
+
+  Map<int, Map<int, XtreamEpisodeInfo>> _parseSeriesEpisodes(
+    Map<String, dynamic> map,
+    XtreamCredentials creds,
+  ) {
+    final episodes = map['episodes'];
+    if (episodes == null) return {};
+
+    final result = <int, Map<int, XtreamEpisodeInfo>>{};
+
+    void addEpisode(int season, int episodeNum, Map<String, dynamic> episodeValue) {
+      final episodeId = _parseInt(episodeValue['id']) ?? _parseInt(episodeValue['stream_id']);
+      if (episodeId == null) return;
+
+      final title = episodeValue['title']?.toString().trim();
+      final name = episodeValue['name']?.toString().trim();
+      final displayTitle = (title != null && title.isNotEmpty)
+          ? title
+          : (name != null && name.isNotEmpty ? name : 'Episode $episodeNum');
+
+      result.putIfAbsent(season, () => {});
+      result[season]![episodeNum] = XtreamEpisodeInfo(
+        streamId: episodeId,
+        url: _seriesStreamUrl(episodeValue, episodeId, creds),
+        title: displayTitle,
+      );
+    }
+
+    if (episodes is! Map) return result;
+
+    episodes.forEach((seasonKey, seasonValue) {
+      final season = int.tryParse(seasonKey.toString());
+      if (season == null) return;
+
+      // Standard Xtream format: "1": [ { episode objects... } ]
+      if (seasonValue is List) {
+        var fallbackNum = 1;
+        for (final item in seasonValue) {
+          if (item is! Map) continue;
+          final epMap = Map<String, dynamic>.from(item);
+          final epNum = _parseInt(epMap['episode_num']) ??
+              _parseInt(epMap['episode_number']) ??
+              fallbackNum;
+          addEpisode(season, epNum, epMap);
+          fallbackNum = epNum + 1;
+        }
+        return;
+      }
+
+      // Alternate format: "1": { "1": { episode }, "2": { episode } }
+      if (seasonValue is Map) {
+        seasonValue.forEach((episodeKey, episodeValue) {
+          if (episodeValue is! Map) return;
+          final epMap = Map<String, dynamic>.from(episodeValue);
+          final epNum = int.tryParse(episodeKey.toString()) ??
+              _parseInt(epMap['episode_num']) ??
+              _parseInt(epMap['episode_number']);
+          if (epNum == null) return;
+          addEpisode(season, epNum, epMap);
+        });
+      }
+    });
+
+    return result;
   }
 
   List<String> _apiBasesToTry({List<String> streamUrls = const []}) {

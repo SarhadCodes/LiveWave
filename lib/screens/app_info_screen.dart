@@ -49,7 +49,7 @@ class _AppInfoScreenState extends State<AppInfoScreen> {
                   children: [
                     // Title
                     Text(
-                      'Live Wave',
+                      'WAVE',
                       style: TextStyle(
                         color: AppTheme.textPrimary,
                         fontSize: 32,
@@ -59,7 +59,7 @@ class _AppInfoScreenState extends State<AppInfoScreen> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'Technical details and system status of Live Wave.',
+                      'Technical details and system status of WAVE.',
                       style: TextStyle(
                         color: AppTheme.textSecondary,
                         fontSize: 15,
@@ -92,7 +92,7 @@ class _AppInfoScreenState extends State<AppInfoScreen> {
                             StatusCard(
                               icon: Icons.tv_rounded,
                               label: 'Application Name',
-                              value: 'Live Wave',
+                              value: 'WAVE',
                               iconColor: AppTheme.primaryColor,
                             ),
                             // Version and Theme removed as requested
@@ -143,7 +143,7 @@ class _AppInfoScreenState extends State<AppInfoScreen> {
                   style: TextStyle(fontSize: 12),
                 ),
                 Text(
-                  ' by Sarhad',
+                  ' by KURDLOGS',
                   style: TextStyle(
                     color: AppTheme.textTertiary,
                     fontSize: 12,
@@ -154,7 +154,7 @@ class _AppInfoScreenState extends State<AppInfoScreen> {
             ),
           ),
           Text(
-            'LIVE WAVE ENTERTAINMENT © 2025',
+            'WAVE © 2025',
             style: TextStyle(
               color: AppTheme.textTertiary.withOpacity(0.5),
               fontSize: 10,

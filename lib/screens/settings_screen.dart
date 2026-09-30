@@ -17,6 +17,8 @@ import 'admin/admin_login_screen.dart';
 import 'admin/admin_dashboard_screen.dart';
 import 'account_screen.dart';
 import 'downloads_screen.dart';
+import 'category_order_screen.dart';
+import '../widgets/tv_settings_layout.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -27,11 +29,13 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   int _adminTaps = 0;
+  int _devTaps = 0;
   final _authService = AuthService();
   final _xtreamServerController = TextEditingController();
   final _xtreamUserController = TextEditingController();
   final _xtreamPassController = TextEditingController();
   bool _xtreamCredsLoaded = false;
+  String? _selectedTvSettingId = 'account';
 
   @override
   void initState() {
@@ -71,6 +75,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
   }
 
+  void _handleDeveloperUnlock() {
+    _devTaps++;
+    if (_devTaps >= 5) {
+      _devTaps = 0;
+      final settings = Provider.of<SettingsProvider>(context, listen: false);
+      settings.setDeveloperModeEnabled(true);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Developer mode enabled'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
   void _handleAdminAccess() async {
     _adminTaps++;
     if (_adminTaps >= 7) {
@@ -96,116 +115,391 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final settings = Provider.of<SettingsProvider>(context);
     final l10n = AppLocalizations.of(context);
     final isMobile = settings.layoutMode == 'mobile';
-    final horizontalPadding = isMobile ? AppTheme.spacingM : AppTheme.spacingXXL;
 
     return Scaffold(
       backgroundColor: AppTheme.backgroundColor,
-      body: Stack(
-        children: [
-          // Background Glow
-          Positioned(
-            top: -100,
-            right: -100,
-            child: Container(
-              width: 300,
-              height: 300,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(
-                    color: AppTheme.primaryColor.withOpacity(0.05),
-                    blurRadius: 100,
-                    spreadRadius: 50,
-                  ),
-                ],
-              ),
-            ),
-          ),
-          
-          SingleChildScrollView(
-            padding: EdgeInsets.symmetric(
-              horizontal: horizontalPadding, 
-              vertical: AppTheme.spacingM
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const SizedBox(height: 10),
-                _buildModernHeader(isMobile, l10n),
-                const SizedBox(height: 20),
+      body: isMobile
+          ? _buildMobileSettingsBody(settings, l10n, isMobile)
+          : _buildTvSettingsBody(settings, l10n),
+    );
+  }
 
-                isMobile 
-                  ? Column(
-                      children: [
-                        if (settings.activationManaged) ...[
-                          _buildAccountSection(isMobile),
-                          const SizedBox(height: 20),
-                        ],
-                        _buildLanguageSection(settings, isMobile, l10n),
-                        const SizedBox(height: 20),
-                        if (!settings.activationManaged) ...[
-                          _buildContentSourceSection(settings, isMobile, l10n),
-                          const SizedBox(height: 20),
-                          _buildXtreamCredentialsSection(settings, isMobile, l10n),
-                          const SizedBox(height: 20),
-                        ],
-                        _buildUserInterfaceSection(settings, isMobile, l10n),
-                        const SizedBox(height: 20),
-                        _buildDownloadsSection(isMobile, l10n),
-                        const SizedBox(height: 20),
-                        _buildUpdateSection(isMobile, l10n),
-                      ],
-                    )
-                  : Column(
-                      children: [
-                        if (settings.activationManaged) ...[
-                          _buildAccountSection(isMobile),
-                          const SizedBox(height: 20),
-                        ],
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(child: _buildLanguageSection(settings, isMobile, l10n)),
-                            if (!settings.activationManaged) ...[
-                              const SizedBox(width: 20),
-                              Expanded(child: _buildContentSourceSection(settings, isMobile, l10n)),
-                            ],
-                          ],
-                        ),
-                        if (!settings.activationManaged) ...[
-                          const SizedBox(height: 20),
-                          _buildXtreamCredentialsSection(settings, isMobile, l10n),
-                        ],
-                        const SizedBox(height: 20),
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(child: _buildUserInterfaceSection(settings, isMobile, l10n)),
-                            const SizedBox(width: 20),
-                            Expanded(child: _buildDownloadsSection(isMobile, l10n)),
-                          ],
-                        ),
-                        const SizedBox(height: 20),
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(child: _buildUpdateSection(isMobile, l10n)),
-                            const Expanded(child: SizedBox()),
-                          ],
-                        ),
-                      ],
-                    ),
+  Widget _buildMobileSettingsBody(
+    SettingsProvider settings,
+    AppLocalizations l10n,
+    bool isMobile,
+  ) {
+    final horizontalPadding = AppTheme.spacingM;
 
-                const SizedBox(height: 40),
-                _buildFooter(l10n),
-                const SizedBox(height: 60), 
+    return Stack(
+      children: [
+        Positioned(
+          top: -100,
+          right: -100,
+          child: Container(
+            width: 300,
+            height: 300,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: AppTheme.primaryColor.withOpacity(0.05),
+                  blurRadius: 100,
+                  spreadRadius: 50,
+                ),
               ],
             ),
           ),
-        ],
-      ),
+        ),
+        SingleChildScrollView(
+          padding: EdgeInsets.symmetric(
+            horizontal: horizontalPadding,
+            vertical: AppTheme.spacingM,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SizedBox(height: 10),
+              _buildModernHeader(isMobile, l10n),
+              const SizedBox(height: 20),
+              if (settings.activationManaged) ...[
+                _buildAccountSection(isMobile),
+                const SizedBox(height: 20),
+              ],
+              _buildLanguageSection(settings, isMobile, l10n),
+              const SizedBox(height: 20),
+              if (!settings.activationManaged) ...[
+                _buildContentSourceSection(settings, isMobile, l10n),
+                const SizedBox(height: 20),
+                _buildXtreamCredentialsSection(settings, isMobile, l10n),
+                const SizedBox(height: 20),
+              ],
+              _buildUserInterfaceSection(settings, isMobile, l10n),
+              const SizedBox(height: 20),
+              _buildCategoryOrderSection(isMobile, l10n),
+              const SizedBox(height: 20),
+              _buildDownloadsSection(isMobile, l10n),
+              const SizedBox(height: 20),
+              _buildUpdateSection(isMobile, l10n),
+              const SizedBox(height: 40),
+              _buildFooter(l10n),
+              const SizedBox(height: 60),
+            ],
+          ),
+        ),
+      ],
     );
   }
+
+  Widget _buildTvSettingsBody(SettingsProvider settings, AppLocalizations l10n) {
+    return Consumer<ActivationProvider>(
+      builder: (context, activation, _) {
+        final entries = _buildTvSettingsEntries(settings, activation, l10n);
+        final selectedId = _selectedTvSettingId != null &&
+                entries.any((e) => e.id == _selectedTvSettingId)
+            ? _selectedTvSettingId!
+            : (entries.isNotEmpty ? entries.first.id : null);
+        final initialFocusId = settings.activationManaged &&
+                entries.any((e) => e.id == 'account')
+            ? 'account'
+            : selectedId;
+
+        return TvSettingsLayout(
+          title: l10n.translate('settings'),
+          entries: entries,
+          selectedId: selectedId,
+          initialFocusId: initialFocusId,
+          onSelected: (id) {
+            if (_selectedTvSettingId != id) {
+              setState(() => _selectedTvSettingId = id);
+            }
+          },
+          detailBuilder: (id) => _buildTvSettingDetail(id, settings, l10n, activation),
+          footer: _buildFooter(l10n),
+        );
+      },
+    );
+  }
+
+  List<TvSettingsEntry> _buildTvSettingsEntries(
+    SettingsProvider settings,
+    ActivationProvider activation,
+    AppLocalizations l10n,
+  ) {
+    final entries = <TvSettingsEntry>[];
+
+    if (settings.activationManaged) {
+      final accountSubtitle = activation.isActive
+          ? (activation.expiresAt != null
+              ? 'Active • expires ${_formatShortDate(activation.expiresAt!)}'
+              : 'Subscription active')
+          : activation.isExpired
+              ? 'Subscription expired'
+              : 'Device activation';
+      entries.add(TvSettingsEntry(
+        id: 'account',
+        section: 'Account',
+        title: 'My Account',
+        subtitle: accountSubtitle,
+        icon: Icons.person_rounded,
+      ));
+    }
+
+    entries.addAll([
+      TvSettingsEntry(
+        id: 'language',
+        section: 'General',
+        title: l10n.translate('language'),
+        subtitle: settings.language == 'ku'
+            ? l10n.translate('kurdish')
+            : l10n.translate('english'),
+        icon: Icons.language_rounded,
+      ),
+      TvSettingsEntry(
+        id: 'layout',
+        section: 'General',
+        title: l10n.translate('user_interface'),
+        subtitle: settings.layoutMode == 'tv'
+            ? l10n.translate('cinema_tv')
+            : l10n.translate('pocket_mobile'),
+        icon: Icons.grid_view_rounded,
+      ),
+      TvSettingsEntry(
+        id: 'category_order',
+        section: 'General',
+        title: l10n.translate('category_order'),
+        subtitle: l10n.translate('category_order_subtitle'),
+        icon: Icons.sort_rounded,
+      ),
+    ]);
+
+    if (!settings.activationManaged) {
+      entries.addAll([
+        TvSettingsEntry(
+          id: 'content_source',
+          section: 'Content',
+          title: l10n.translate('content_source'),
+          subtitle: settings.isXtreamSource
+              ? l10n.translate('xtream_codes')
+              : l10n.translate('live_wave_catalog'),
+          icon: Icons.live_tv_rounded,
+        ),
+        TvSettingsEntry(
+          id: 'xtream',
+          section: 'Content',
+          title: l10n.translate('xtream_login'),
+          subtitle: _xtreamCredsLoaded && _xtreamServerController.text.isNotEmpty
+              ? _xtreamServerController.text
+              : l10n.translate('xtream_login_subtitle'),
+          icon: Icons.vpn_key_rounded,
+        ),
+      ]);
+    }
+
+    entries.addAll([
+      TvSettingsEntry(
+        id: 'downloads',
+        section: 'System',
+        title: l10n.translate('downloads'),
+        subtitle: 'Offline media',
+        icon: Icons.download_rounded,
+      ),
+      TvSettingsEntry(
+        id: 'update',
+        section: 'System',
+        title: 'Software update',
+        subtitle: 'Check for new version',
+        icon: Icons.system_update_rounded,
+      ),
+    ]);
+
+    return entries;
+  }
+
+  Widget _buildTvSettingDetail(
+    String id,
+    SettingsProvider settings,
+    AppLocalizations l10n,
+    ActivationProvider activation,
+  ) {
+    switch (id) {
+      case 'account':
+        return _buildTvAccountDetail(activation);
+      case 'language':
+        return _buildTvLanguageDetail(settings, l10n);
+      case 'layout':
+        return _buildTvLayoutDetail(settings, l10n);
+      case 'category_order':
+        return _buildTvCategoryOrderDetail();
+      case 'content_source':
+        return _buildTvContentSourceDetail(settings, l10n);
+      case 'xtream':
+        return _buildTvXtreamDetail(settings, l10n);
+      case 'downloads':
+        return _buildTvDownloadsDetail();
+      case 'update':
+        return _buildTvUpdateDetail();
+      default:
+        return const SizedBox.shrink();
+    }
+  }
+
+  Widget _buildTvAccountDetail(ActivationProvider activation) {
+    final subtitle = activation.isActive
+        ? (activation.expiresAt != null
+            ? 'Active until ${_formatShortDate(activation.expiresAt!)}'
+            : 'Your subscription is active')
+        : activation.isExpired
+            ? 'Your subscription has expired'
+            : 'View device ID and activation status';
+
+    return TvSettingsActionButton(
+      icon: Icons.open_in_new_rounded,
+      label: 'Open account',
+      subtitle: subtitle,
+      onPressed: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (context) => const AccountScreen()),
+        );
+      },
+    );
+  }
+
+  Widget _buildTvLanguageDetail(SettingsProvider settings, AppLocalizations l10n) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TvSettingsDetailOption(
+          title: l10n.translate('english'),
+          subtitle: 'English',
+          imageAsset: 'assets/flags/b.png',
+          selected: settings.language == 'en',
+          onSelect: () => settings.setLanguage('en'),
+        ),
+        TvSettingsDetailOption(
+          title: l10n.translate('kurdish'),
+          subtitle: 'کوردی',
+          imageAsset: 'assets/flags/k.png',
+          selected: settings.language == 'ku',
+          onSelect: () => settings.setLanguage('ku'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTvLayoutDetail(SettingsProvider settings, AppLocalizations l10n) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TvSettingsDetailOption(
+          title: l10n.translate('cinema_tv'),
+          subtitle: l10n.translate('landscape'),
+          icon: Icons.tv_rounded,
+          selected: settings.layoutMode == 'tv',
+          onSelect: () => settings.setLayoutMode('tv'),
+        ),
+        TvSettingsDetailOption(
+          title: l10n.translate('pocket_mobile'),
+          subtitle: l10n.translate('portrait'),
+          icon: Icons.smartphone_rounded,
+          selected: settings.layoutMode == 'mobile',
+          onSelect: () => settings.setLayoutMode('mobile'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTvContentSourceDetail(SettingsProvider settings, AppLocalizations l10n) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TvSettingsDetailOption(
+          title: l10n.translate('live_wave_catalog'),
+          subtitle: l10n.translate('firestore_channels'),
+          icon: Icons.cloud_rounded,
+          selected: settings.contentSource == SettingsProvider.contentSourceFirestore,
+          onSelect: () => _switchContentSource(settings, SettingsProvider.contentSourceFirestore),
+        ),
+        TvSettingsDetailOption(
+          title: l10n.translate('xtream_codes'),
+          subtitle: l10n.translate('xtream_iptv'),
+          icon: Icons.dns_rounded,
+          selected: settings.contentSource == SettingsProvider.contentSourceXtream,
+          onSelect: () => _switchContentSource(settings, SettingsProvider.contentSourceXtream),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTvXtreamDetail(SettingsProvider settings, AppLocalizations l10n) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildXtreamField(
+          controller: _xtreamServerController,
+          label: l10n.translate('xtream_server'),
+          hint: 'http://your-server.com:2095',
+        ),
+        const SizedBox(height: 12),
+        _buildXtreamField(
+          controller: _xtreamUserController,
+          label: l10n.translate('xtream_username'),
+        ),
+        const SizedBox(height: 12),
+        _buildXtreamField(
+          controller: _xtreamPassController,
+          label: l10n.translate('xtream_password'),
+          obscure: true,
+        ),
+        const SizedBox(height: 20),
+        TvSettingsActionButton(
+          icon: Icons.save_rounded,
+          label: l10n.translate('xtream_save_reload'),
+          onPressed: () => _saveXtreamCredentials(settings),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTvCategoryOrderDetail() {
+    return TvSettingsActionButton(
+      icon: Icons.sort_rounded,
+      label: AppLocalizations.of(context).translate('category_order'),
+      subtitle: AppLocalizations.of(context).translate('category_order_subtitle'),
+      onPressed: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (context) => const CategoryOrderScreen()),
+        );
+      },
+    );
+  }
+
+  Widget _buildTvDownloadsDetail() {
+    return TvSettingsActionButton(
+      icon: Icons.offline_pin_rounded,
+      label: 'My downloads',
+      subtitle: 'Watch offline media',
+      onPressed: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (context) => const DownloadsScreen()),
+        );
+      },
+    );
+  }
+
+  Widget _buildTvUpdateDetail() {
+    return TvSettingsActionButton(
+      icon: Icons.system_update_rounded,
+      label: 'Check for updates',
+      subtitle: 'Keep your app up to date',
+      onPressed: () => UpdateService.checkForUpdate(context, showNoUpdate: true),
+    );
+  }
+
+  // --- Legacy mobile / section builders below ---
 
   Widget _buildModernHeader(bool isMobile, AppLocalizations l10n) {
     return Column(
@@ -341,7 +635,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 : 'Subscription active')
             : activation.isExpired
                 ? 'Subscription expired'
-                : 'Tap to view device ID & activation';
+                : 'Press OK to view device ID & activation';
+
+        void openAccount() {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (context) => const AccountScreen()),
+          );
+        }
 
         return _buildPremiumSection(
           isMobile: isMobile,
@@ -349,78 +650,120 @@ class _SettingsScreenState extends State<SettingsScreen> {
           title: 'Account',
           subtitle: 'Device activation & subscription',
           children: [
-            Focus(
-              onKeyEvent: (node, event) {
-                if (event is KeyDownEvent &&
-                    (event.logicalKey == LogicalKeyboardKey.enter ||
-                        event.logicalKey == LogicalKeyboardKey.select)) {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (context) => const AccountScreen()),
-                  );
-                  return KeyEventResult.handled;
-                }
-                return KeyEventResult.ignored;
-              },
-              child: InkWell(
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => const AccountScreen()),
-                ),
-                borderRadius: BorderRadius.circular(12),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 44,
-                        height: 44,
-                        decoration: BoxDecoration(
-                          color: AppTheme.primaryColor.withOpacity(0.12),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Icon(
-                          activation.isActive
-                              ? Icons.verified_rounded
-                              : activation.isExpired
-                                  ? Icons.timer_off_rounded
-                                  : Icons.hourglass_top_rounded,
-                          color: activation.isActive
-                              ? Colors.green
-                              : activation.isExpired
-                                  ? Colors.red
-                                  : Colors.orange,
-                        ),
-                      ),
-                      const SizedBox(width: 14),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'My Account',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 15,
-                              ),
+            _buildOptionsRow(
+              isMobile: isMobile,
+              children: [
+                Focus(
+                  autofocus: true,
+                  onKeyEvent: (node, event) {
+                    if (event is KeyDownEvent &&
+                        (event.logicalKey == LogicalKeyboardKey.enter ||
+                            event.logicalKey == LogicalKeyboardKey.select)) {
+                      openAccount();
+                      return KeyEventResult.handled;
+                    }
+                    return KeyEventResult.ignored;
+                  },
+                  child: Builder(
+                    builder: (context) {
+                      final isFocused = Focus.of(context).hasFocus;
+                      return InkWell(
+                        onTap: openAccount,
+                        borderRadius: BorderRadius.circular(12),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 250),
+                          constraints: BoxConstraints(
+                            maxWidth: isMobile ? double.infinity : double.infinity,
+                            minWidth: 140,
+                          ),
+                          height: 70,
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          decoration: BoxDecoration(
+                            color: isFocused
+                                ? Colors.white
+                                : AppTheme.cardColor.withOpacity(0.3),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: isFocused ? Colors.white : Colors.white.withOpacity(0.05),
+                              width: isFocused ? 3 : 1,
                             ),
-                            const SizedBox(height: 4),
-                            Text(
-                              subtitle,
-                              style: TextStyle(
-                                color: Colors.white.withOpacity(0.5),
-                                fontSize: 12,
+                            boxShadow: isFocused
+                                ? [
+                                    BoxShadow(
+                                      color: AppTheme.primaryColor.withOpacity(0.3),
+                                      blurRadius: 20,
+                                      spreadRadius: 2,
+                                    ),
+                                  ]
+                                : [],
+                          ),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 36,
+                                height: 36,
+                                decoration: BoxDecoration(
+                                  color: isFocused
+                                      ? Colors.black.withOpacity(0.06)
+                                      : AppTheme.primaryColor.withOpacity(0.12),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Icon(
+                                  activation.isActive
+                                      ? Icons.verified_rounded
+                                      : activation.isExpired
+                                          ? Icons.timer_off_rounded
+                                          : Icons.hourglass_top_rounded,
+                                  color: activation.isActive
+                                      ? (isFocused ? Colors.green.shade700 : Colors.green)
+                                      : activation.isExpired
+                                          ? (isFocused ? Colors.red.shade700 : Colors.red)
+                                          : (isFocused ? Colors.orange.shade800 : Colors.orange),
+                                  size: 20,
+                                ),
                               ),
-                            ),
-                          ],
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Text(
+                                      'My Account',
+                                      style: TextStyle(
+                                        color: isFocused ? Colors.black : Colors.white,
+                                        fontWeight: FontWeight.w900,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      subtitle,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        color: isFocused
+                                            ? Colors.black54
+                                            : Colors.white.withOpacity(0.5),
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Icon(
+                                Icons.chevron_right_rounded,
+                                color: isFocused ? Colors.black54 : Colors.white38,
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
-                      const Icon(Icons.chevron_right_rounded, color: Colors.white38),
-                    ],
+                      );
+                    },
                   ),
                 ),
-              ),
+              ],
             ),
           ],
         );
@@ -651,6 +994,59 @@ class _SettingsScreenState extends State<SettingsScreen> {
         duration: const Duration(seconds: 3),
         backgroundColor: AppTheme.primaryColor.withOpacity(0.9),
       ),
+    );
+  }
+
+  Widget _buildCategoryOrderSection(bool isMobile, AppLocalizations l10n) {
+    return _buildPremiumSection(
+      isMobile: isMobile,
+      icon: Icons.sort_rounded,
+      title: l10n.translate('category_order'),
+      subtitle: l10n.translate('category_order_subtitle'),
+      children: [
+        _buildOptionsRow(
+          isMobile: isMobile,
+          children: [
+            Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const CategoryOrderScreen()),
+                  );
+                },
+                borderRadius: BorderRadius.circular(12),
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  decoration: BoxDecoration(
+                    color: AppTheme.surfaceColor,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.sort_rounded, color: AppTheme.primaryColor),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          l10n.translate('category_order'),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      const Icon(Icons.chevron_right_rounded, color: Colors.white54),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 
@@ -931,9 +1327,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 8),
             GestureDetector(
-              onTap: _handleAdminAccess,
+              onTap: () {
+                _handleDeveloperUnlock();
+                _handleAdminAccess();
+              },
               child: Text(
-                'LIVE WAVE ENTERTAINMENT v2.0', 
+                'WAVE v2.0', 
                 style: TextStyle(
                   color: AppTheme.textTertiary.withOpacity(0.3), 
                   fontSize: 9, 

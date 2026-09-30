@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -127,18 +126,14 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
 
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     _lockToLandscape();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _lockToLandscape();
+    });
   }
 
   bool get _isMobileLayout => _initialLayoutMode == 'mobile';
 
   void _lockToLandscape() {
-    if (!kIsWeb && Platform.isIOS) {
-      SystemChrome.setPreferredOrientations(const [
-        DeviceOrientation.portraitUp,
-        DeviceOrientation.portraitDown,
-      ]);
-      return;
-    }
     SystemChrome.setPreferredOrientations(const [
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
@@ -173,12 +168,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     final views = WidgetsBinding.instance.platformDispatcher.views;
     if (views.isEmpty) return;
     final view = views.first;
-    final portrait = view.physicalSize.height > view.physicalSize.width;
-    if (!kIsWeb && Platform.isIOS) {
-      if (!portrait) _lockToLandscape();
-      return;
-    }
-    if (portrait) {
+    if (view.physicalSize.height > view.physicalSize.width) {
       _lockToLandscape();
     }
   }

@@ -147,7 +147,10 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen>
     WidgetsBinding.instance.addObserver(this);
     WakelockPlus.enable();
     _lockToLandscape();
-    
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _lockToLandscape();
+    });
+
     _loadSavedSettings();
 
     // Request initial focus for TV navigation

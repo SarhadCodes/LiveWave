@@ -6,10 +6,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'live_stream_config.dart';
+import 'vod_player.dart';
 
 /// FastTV-style native ExoPlayer → Flutter Texture bridge.
 /// One texture, one ExoPlayer — reused across channel switches.
-class IptvExoPlayerController {
+class IptvExoPlayerController implements VodPlayerHandle {
   IptvExoPlayerController();
 
   static const _channel = MethodChannel('iptv_exo_player');
@@ -50,9 +51,11 @@ class IptvExoPlayerController {
   bool get shouldShowLoading =>
       _textureId == null || (_hasSource && !_hasFrame && !_hasError);
 
+  @override
   void Function(String event, Map<String, dynamic> data)? onEvent;
 
   /// Step 1–2: create native texture (SurfaceTextureEntry).
+  @override
   Future<void> ensureInitialized() async {
     if (kIsWeb || !Platform.isAndroid) return;
     if (_disposed) {
@@ -88,6 +91,7 @@ class IptvExoPlayerController {
   }
 
   /// Ensure Flutter Texture is in the widget tree before playback starts.
+  @override
   Future<void> mountTextureAndAttachSurface() async {
     if (kIsWeb || !Platform.isAndroid || _disposed) return;
     if (_surfaceAttached) return;
@@ -167,6 +171,7 @@ class IptvExoPlayerController {
   }
 
   /// VOD — same ExoPlayer, different MediaSource factory on native side.
+  @override
   Future<void> setVodSource(
     String url, {
     Map<String, String>? headers,
@@ -187,18 +192,22 @@ class IptvExoPlayerController {
     });
   }
 
+  @override
   Future<void> pause() async {
     await _channel.invokeMethod('pause');
   }
 
+  @override
   Future<void> resume() async {
     await _channel.invokeMethod('resume');
   }
 
+  @override
   Future<void> seekTo(int positionMs) async {
     await _channel.invokeMethod('seekTo', {'position': positionMs});
   }
 
+  @override
   Future<Map<String, dynamic>> getPosition() async {
     final raw = await _channel.invokeMethod('getPosition');
     return Map<String, dynamic>.from(raw as Map);
@@ -244,6 +253,7 @@ class IptvExoPlayerController {
     await recover();
   }
 
+  @override
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
@@ -265,6 +275,7 @@ class IptvExoPlayerController {
     _layoutTick.dispose();
   }
 
+  @override
   void applyAspectRatio({required int modeIndex}) {
     if (_disposed) return;
     _aspectMode = modeIndex;
@@ -359,6 +370,7 @@ class IptvExoPlayerController {
   }
 
   /// Texture widget — stable key, never replaced during playback.
+  @override
   Widget buildView() {
     if (kIsWeb || !Platform.isAndroid) {
       return const ColoredBox(color: Colors.black);

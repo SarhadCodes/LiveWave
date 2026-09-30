@@ -162,6 +162,15 @@ class _AppInfoScreenState extends State<AppInfoScreen> {
               letterSpacing: 0.5,
             ),
           ),
+          const SizedBox(height: 8),
+          Text(
+            'WAVE MUSIC streams playable tracks from SoundCloud. Creators are credited in the player.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: AppTheme.textTertiary.withOpacity(0.7),
+              fontSize: 10,
+            ),
+          ),
           const SizedBox(height: AppTheme.spacingL),
         ],
       ),

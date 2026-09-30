@@ -8,7 +8,6 @@ import '../screens/home_screen_new.dart';
 import '../screens/live_channels_screen.dart';
 import '../screens/search_screen.dart';
 import '../screens/settings_screen.dart';
-import '../screens/downloads_screen.dart';
 import '../screens/movies_screen.dart';
 import '../screens/tv_shows_screen.dart';
 import '../screens/wave_home_screen.dart';
@@ -19,8 +18,9 @@ import '../providers/channels_provider.dart';
 import '../providers/movies_provider.dart';
 import '../providers/tv_shows_provider.dart';
 import '../providers/favorites_provider.dart';
-import '../providers/wave_provider.dart';
+import '../providers/wave_music_provider.dart';
 import '../widgets/custom_bottom_nav.dart';
+import '../widgets/wave_music_mini_player.dart';
 import '../services/user_content_cleanup.dart';
 import '../l10n/app_localizations.dart';
 import '../widgets/tv_navigation_scope.dart';
@@ -170,7 +170,7 @@ class _AppNavigationState extends State<AppNavigation> with WidgetsBindingObserv
     } else if (index == AppNavIndex.shows && tvShows.status == TvShowsStatus.initial) {
       tvShows.fetchAllTvShows();
     } else if (index == AppNavIndex.wave) {
-      Provider.of<WaveProvider>(context, listen: false).loadHomeIfNeeded();
+      Provider.of<WaveMusicProvider>(context, listen: false).load();
     }
   }
 
@@ -351,6 +351,7 @@ class _AppNavigationState extends State<AppNavigation> with WidgetsBindingObserv
                                   Expanded(
                                     child: _screenForIndex(_selectedIndex),
                                   ),
+                                  const WaveMusicMiniPlayer(),
                                 ],
                               ),
                             ),
@@ -377,7 +378,12 @@ class _AppNavigationState extends State<AppNavigation> with WidgetsBindingObserv
                   ),
                   body: SafeArea(
                     bottom: false,
-                    child: _screenForIndex(_selectedIndex),
+                    child: Column(
+                      children: [
+                        Expanded(child: _screenForIndex(_selectedIndex)),
+                        const WaveMusicMiniPlayer(aboveNavigationBar: true),
+                      ],
+                    ),
                   ),
                   bottomNavigationBar: CustomBottomNav(
                     currentIndex: _selectedIndex,

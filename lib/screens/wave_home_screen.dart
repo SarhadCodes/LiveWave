@@ -1,24 +1,23 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:liquid_pull_to_refresh/liquid_pull_to_refresh.dart';
 import 'package:provider/provider.dart';
 
 import '../config/app_theme.dart';
 import '../l10n/app_localizations.dart';
-import '../models/wave_video.dart';
+import '../models/wave_music_album.dart';
+import '../models/wave_music_artist.dart';
+import '../models/wave_music_playlist.dart';
+import '../models/wave_music_track.dart';
 import '../providers/settings_provider.dart';
-import '../providers/wave_library_provider.dart';
-import '../providers/wave_provider.dart';
-import '../services/youtube_api_service.dart';
-import '../widgets/category_chip.dart';
-import '../widgets/media_row.dart';
-import '../widgets/wave_hero.dart';
-import '../widgets/wave_skeleton.dart';
-import '../widgets/wave_video_card.dart';
-import 'wave_grid_screen.dart';
-import 'wave_library_screen.dart';
-import 'wave_search_screen.dart';
-import 'wave_watch_screen.dart';
+import '../providers/wave_music_provider.dart';
+import '../widgets/tv_navigation_scope.dart';
+import '../widgets/wave_music_actions.dart';
+import '../widgets/wave_music_format.dart';
+import '../widgets/wave_music_album_card.dart';
+import '../widgets/wave_music_track_tile.dart';
+import 'wave_music_album_screen.dart';
+import 'wave_music_artist_screen.dart';
+import 'wave_music_playlist_screen.dart';
+import 'wave_music_search_screen.dart';
 
 class WaveHomeScreen extends StatefulWidget {
   const WaveHomeScreen({super.key});
@@ -28,369 +27,248 @@ class WaveHomeScreen extends StatefulWidget {
 }
 
 class WaveHomeScreenState extends State<WaveHomeScreen> {
-  final _chipNodes = <WaveFeedKind, FocusNode>{};
-  final _heroNode = FocusNode(debugLabel: 'wave_hero');
-  final _searchNode = FocusNode(debugLabel: 'wave_search');
-  final _scrollController = ScrollController();
-  final _apiKeyController = TextEditingController();
-  final Map<String, FocusNode> _cardNodes = {};
-
-  static const _chips = <WaveFeedKind>[
-    WaveFeedKind.forYou,
-    WaveFeedKind.trending,
-    WaveFeedKind.live,
-    WaveFeedKind.music,
-    WaveFeedKind.gaming,
-    WaveFeedKind.technology,
-    WaveFeedKind.podcasts,
-    WaveFeedKind.documentaries,
-    WaveFeedKind.news,
-  ];
-
-  @override
-  void initState() {
-    super.initState();
-    for (final chip in _chips) {
-      _chipNodes[chip] = FocusNode(debugLabel: chip.name);
-    }
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<WaveProvider>().loadHomeIfNeeded();
-    });
-  }
+  final _searchController = TextEditingController();
+  final _searchFocus = FocusNode(debugLabel: 'music_search_header');
+  WaveMusicTab _section = WaveMusicTab.home;
 
   @override
   void dispose() {
-    _heroNode.dispose();
-    _searchNode.dispose();
-    _scrollController.dispose();
-    _apiKeyController.dispose();
-    for (final node in _chipNodes.values) {
-      node.dispose();
-    }
-    for (final node in _cardNodes.values) {
-      node.dispose();
-    }
+    _searchController.dispose();
+    _searchFocus.dispose();
     super.dispose();
   }
 
   void focusPrimary() {
     if (!mounted) return;
-    if (_searchNode.canRequestFocus) {
-      _searchNode.requestFocus();
+    _searchFocus.requestFocus();
+  }
+
+  void _openSection(WaveMusicProvider music, WaveMusicTab tab) {
+    _section = tab;
+    _searchController.clear();
+    music.onSearchChanged('');
+    music.setTab(tab);
+  }
+
+  void _onSearchChanged(WaveMusicProvider music, String value) {
+    music.onSearchChanged(value);
+    if (value.trim().isEmpty) {
+      if (music.tab == WaveMusicTab.search) music.setTab(_section);
       return;
     }
-    _chipNodes[WaveFeedKind.forYou]?.requestFocus();
-  }
-
-  FocusNode _cardNode(String id) {
-    return _cardNodes.putIfAbsent(id, () => FocusNode(debugLabel: id));
-  }
-
-  void _openVideo(WaveVideo video) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => WaveWatchScreen(video: video)),
-    );
-  }
-
-  Future<void> _refresh() {
-    return context.read<WaveProvider>().refreshHome(force: true);
+    if (music.tab == WaveMusicTab.home ||
+        music.tab == WaveMusicTab.playlists ||
+        music.tab == WaveMusicTab.liked) {
+      _section = music.tab;
+    }
+    if (music.tab != WaveMusicTab.search) music.setTab(WaveMusicTab.search);
   }
 
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
-    final isMobile =
-        Provider.of<SettingsProvider>(context).layoutMode == 'mobile';
+    final music = context.watch<WaveMusicProvider>();
+    final isMobile = context.watch<SettingsProvider>().layoutMode == 'mobile';
+    final tvNav = TvNavigationScope.maybeOf(context);
 
     return Scaffold(
       backgroundColor: AppTheme.backgroundColor,
-      body: Consumer2<WaveProvider, WaveLibraryProvider>(
-        builder: (context, wave, library, _) {
-          if (!wave.hasApiKey && wave.homeStatus != WaveLoadStatus.loading) {
-            return _ApiKeySetup(
-              controller: _apiKeyController,
-              isMobile: isMobile,
-              onSave: () => wave.saveApiKeyAndReload(_apiKeyController.text),
-            );
-          }
-
-          if (wave.homeStatus == WaveLoadStatus.loading &&
-              wave.trending.isEmpty &&
-              wave.chipVideos.isEmpty) {
-            return WaveHomeSkeleton(isMobile: isMobile);
-          }
-
-          if (wave.homeStatus == WaveLoadStatus.error &&
-              wave.trending.isEmpty &&
-              wave.chipVideos.isEmpty) {
-            return WaveErrorBody(
-              message: waveErrorText(l10n, wave.homeError),
-              onRetry: _refresh,
-            );
-          }
-
-          final content = CustomScrollView(
-            controller: _scrollController,
-            physics: isMobile
-                ? const BouncingScrollPhysics()
-                : const ClampingScrollPhysics(),
-            slivers: [
-              SliverToBoxAdapter(child: _header(l10n, isMobile, wave)),
-              if (wave.selectedChip == WaveFeedKind.forYou &&
-                  wave.heroVideo != null)
-                SliverToBoxAdapter(
-                  child: WaveHero(
-                    video: wave.heroVideo!,
-                    isMobile: isMobile,
-                    focusNode: _heroNode,
-                    onWatch: () => _openVideo(wave.heroVideo!),
-                  ),
-                ),
-              SliverPadding(
-                padding: EdgeInsets.only(
-                  top: 16,
-                  bottom: isMobile ? 100 : 40,
-                ),
-                sliver: SliverList(
-                  delegate: SliverChildListDelegate(
-                    wave.selectedChip == WaveFeedKind.forYou
-                        ? _forYouRows(wave, library, l10n, isMobile)
-                        : _chipRows(wave, l10n, isMobile),
-                  ),
-                ),
-              ),
-            ],
-          );
-
-          if (!isMobile) return content;
-          return LiquidPullToRefresh(
-            onRefresh: _refresh,
-            color: AppTheme.accentRed,
-            backgroundColor: AppTheme.backgroundColor,
-            showChildOpacityTransition: false,
-            child: content,
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _header(AppLocalizations l10n, bool isMobile, WaveProvider wave) {
-    final pad = isMobile ? AppTheme.spacingM : AppTheme.spacingXXL;
-    return Padding(
-      padding: EdgeInsets.fromLTRB(pad, isMobile ? 12 : 16, pad, 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      body: Column(
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+          Padding(
+            padding: EdgeInsets.fromLTRB(isMobile ? 16 : 24, isMobile ? 12 : 8, 16, 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                GestureDetector(
+                  onTap: () => _openSection(music, WaveMusicTab.home),
+                  child: Text(
+                    l10n.translate('wave'),
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: isMobile ? 26 : 22, letterSpacing: 1),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Row(
                   children: [
-                    Text(
-                      l10n.translate('wave'),
-                      style: TextStyle(
-                        color: AppTheme.textPrimary,
-                        fontSize: isMobile ? 28 : 24,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: 1.4,
+                    Expanded(
+                      child: TextField(
+                        focusNode: _searchFocus,
+                        controller: _searchController,
+                        onChanged: (value) => _onSearchChanged(music, value),
+                        style: const TextStyle(color: Colors.white),
+                        decoration: InputDecoration(
+                          hintText: l10n.translate('music_search'),
+                          hintStyle: const TextStyle(color: AppTheme.textTertiary),
+                          prefixIcon: const Icon(Icons.search, color: Colors.white54),
+                          isDense: true,
+                          filled: true,
+                          fillColor: AppTheme.surfaceColor,
+                          contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                        ),
                       ),
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      l10n.translate('wave_subtitle'),
-                      style: const TextStyle(
-                        color: AppTheme.textSecondary,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                      ),
+                    const SizedBox(width: 8),
+                    _HeaderIcon(
+                      icon: Icons.queue_music_rounded,
+                      selected: music.tab == WaveMusicTab.playlists,
+                      tooltip: l10n.translate('music_playlists'),
+                      onTap: () => _openSection(music, WaveMusicTab.playlists),
+                    ),
+                    const SizedBox(width: 4),
+                    _HeaderIcon(
+                      icon: music.tab == WaveMusicTab.liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+                      selected: music.tab == WaveMusicTab.liked,
+                      tooltip: l10n.translate('music_liked'),
+                      onTap: () => _openSection(music, WaveMusicTab.liked),
                     ),
                   ],
                 ),
-              ),
-              _HeaderIcon(
-                focusNode: _searchNode,
-                icon: Icons.search_rounded,
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const WaveSearchScreen()),
-                  );
-                },
-              ),
-              const SizedBox(width: 8),
-              _HeaderIcon(
-                icon: Icons.bookmark_outline_rounded,
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const WaveLibraryScreen()),
-                  );
-                },
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          SizedBox(
-            height: 44,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: _chips.length,
-              separatorBuilder: (context, index) => const SizedBox(width: 8),
-              itemBuilder: (context, index) {
-                final chip = _chips[index];
-                return CategoryChip(
-                  label: l10n.translate('wave_chip_${chip.name}'),
-                  isSelected: wave.selectedChip == chip,
-                  focusNode: _chipNodes[chip],
-                  onTap: () => wave.selectChip(chip),
-                );
-              },
+              ],
             ),
+          ),
+          Expanded(
+            child: music.loading
+                ? const _MusicSkeleton()
+                : music.loadError != null
+                    ? Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(music.loadError!, style: const TextStyle(color: Colors.white54)),
+                            const SizedBox(height: 16),
+                            FilledButton(onPressed: music.retryLoad, child: const Text('Retry')),
+                          ],
+                        ),
+                      )
+                    : music.searchQuery.trim().isNotEmpty
+                    ? WaveMusicSearchScreen(controller: _searchController, showField: false)
+                    : switch (music.tab) {
+                        WaveMusicTab.playlists => _PlaylistBody(
+                            onCreate: () => promptCreatePlaylist(context),
+                            onBack: () => _openSection(music, WaveMusicTab.home),
+                          ),
+                        WaveMusicTab.liked => _TrackList(
+                            tracks: music.likedTracks,
+                            empty: 'No liked songs yet',
+                            header: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                _BackHomeButton(onPressed: () => _openSection(music, WaveMusicTab.home)),
+                                if (music.likedTracks.isNotEmpty)
+                                  Padding(
+                                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                                    child: FilledButton.icon(
+                                      onPressed: () => music.playLiked(),
+                                      icon: const Icon(Icons.play_arrow),
+                                      label: const Text('Play liked songs'),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        _ => _HomeBody(onSidebar: tvNav?.focusSidebar),
+                      },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MusicSkeleton extends StatefulWidget {
+  const _MusicSkeleton();
+
+  @override
+  State<_MusicSkeleton> createState() => _MusicSkeletonState();
+}
+
+class _MusicSkeletonState extends State<_MusicSkeleton> with SingleTickerProviderStateMixin {
+  late final AnimationController _pulse = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 900),
+  )..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: Tween<double>(begin: 0.35, end: 0.85).animate(_pulse),
+      child: ListView(
+        physics: const NeverScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        children: [
+          Align(alignment: Alignment.centerLeft, child: _block(width: 128, height: 14)),
+          const SizedBox(height: 14),
+          for (var i = 0; i < 5; i++) ...[
+            _songRow(),
+            const SizedBox(height: 14),
+          ],
+          const SizedBox(height: 10),
+          Align(alignment: Alignment.centerLeft, child: _block(width: 110, height: 14)),
+          const SizedBox(height: 14),
+          const Row(
+            children: [
+              Expanded(child: _SkeletonCover()),
+              SizedBox(width: 12),
+              Expanded(child: _SkeletonCover()),
+              SizedBox(width: 12),
+              Expanded(child: _SkeletonCover()),
+            ],
           ),
         ],
       ),
     );
   }
 
-  List<Widget> _forYouRows(
-    WaveProvider wave,
-    WaveLibraryProvider library,
-    AppLocalizations l10n,
-    bool isMobile,
-  ) {
-    final rows = <Widget>[];
-    if (wave.trending.isNotEmpty) {
-      rows.add(_videoRow(
-        title: l10n.translate('wave_trending_now'),
-        videos: wave.trending,
-        rowId: 'trending',
-        isMobile: isMobile,
-        onSeeMore: () => _openGrid(
-          l10n.translate('wave_trending_now'),
-          WaveFeedKind.trending,
-        ),
-      ));
-    }
-    if (wave.liveNow.isNotEmpty) {
-      rows.add(_videoRow(
-        title: l10n.translate('wave_live_now'),
-        videos: wave.liveNow,
-        rowId: 'live',
-        isMobile: isMobile,
-        onSeeMore: () => _openGrid(
-          l10n.translate('wave_live_now'),
-          WaveFeedKind.live,
-        ),
-      ));
-    }
-    if (wave.followedVideos.isNotEmpty) {
-      rows.add(_videoRow(
-        title: l10n.translate('wave_from_followed'),
-        videos: wave.followedVideos,
-        rowId: 'followed',
-        isMobile: isMobile,
-      ));
-    }
-    if (library.continueWatching.isNotEmpty) {
-      rows.add(_videoRow(
-        title: l10n.translate('continue_watching'),
-        videos: library.continueWatching
-            .map(library.videoFromHistory)
-            .toList(),
-        rowId: 'continue',
-        isMobile: isMobile,
-      ));
-    } else if (library.history.isNotEmpty) {
-      rows.add(_videoRow(
-        title: l10n.translate('wave_recently_watched'),
-        videos: library.history.take(12).map(library.videoFromHistory).toList(),
-        rowId: 'history',
-        isMobile: isMobile,
-      ));
-    }
-    if (library.watchLater.isNotEmpty) {
-      rows.add(_videoRow(
-        title: l10n.translate('wave_watch_later'),
-        videos: library.watchLater.map(library.videoFromSaved).toList(),
-        rowId: 'later',
-        isMobile: isMobile,
-      ));
-    }
-    if (rows.isEmpty) {
-      rows.add(Padding(
-        padding: const EdgeInsets.all(32),
-        child: Text(
-          l10n.translate('wave_empty_home'),
-          textAlign: TextAlign.center,
-          style: const TextStyle(color: AppTheme.textSecondary),
-        ),
-      ));
-    }
-    return rows;
-  }
-
-  List<Widget> _chipRows(WaveProvider wave, AppLocalizations l10n, bool isMobile) {
-    if (wave.chipVideos.isEmpty) {
-      return [
-        Padding(
-          padding: const EdgeInsets.all(32),
-          child: Text(
-            l10n.translate('wave_empty_home'),
-            textAlign: TextAlign.center,
-            style: const TextStyle(color: AppTheme.textSecondary),
+  Widget _songRow() {
+    return Row(
+      children: [
+        _block(width: 48, height: 48, radius: 6),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              FractionallySizedBox(widthFactor: 0.72, child: _block(width: double.infinity, height: 12)),
+              const SizedBox(height: 8),
+              FractionallySizedBox(widthFactor: 0.4, child: _block(width: double.infinity, height: 10)),
+            ],
           ),
         ),
-      ];
-    }
-    return [
-      _videoRow(
-        title: l10n.translate('wave_chip_${wave.selectedChip.name}'),
-        videos: wave.chipVideos,
-        rowId: 'chip_${wave.selectedChip.name}',
-        isMobile: isMobile,
-      ),
-    ];
-  }
-
-  Widget _videoRow({
-    required String title,
-    required List<WaveVideo> videos,
-    required String rowId,
-    required bool isMobile,
-    VoidCallback? onSeeMore,
-  }) {
-    if (videos.isEmpty) return const SizedBox.shrink();
-    return MediaRow(
-      title: title.toUpperCase(),
-      itemCount: videos.length,
-      customWidth: isMobile ? 220 : 260,
-      customHeight: isMobile ? 228 : 258,
-      onSeeMore: onSeeMore,
-      itemBuilder: (context, index) {
-        final video = videos[index];
-        return WaveVideoCard(
-          video: video,
-          focusNode: _cardNode('$rowId-${video.videoId}'),
-          focusPrevious: index > 0
-              ? _cardNode('$rowId-${videos[index - 1].videoId}')
-              : null,
-          focusNext: index < videos.length - 1
-              ? _cardNode('$rowId-${videos[index + 1].videoId}')
-              : null,
-          onTap: () => _openVideo(video),
-        );
-      },
+      ],
     );
   }
 
-  void _openGrid(String title, WaveFeedKind kind) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => WaveGridScreen(title: title, kind: kind),
+  Widget _block({required double width, required double height, double radius = 4}) {
+    return Container(
+      width: width,
+      height: height,
+      decoration: BoxDecoration(
+        color: const Color(0xFF2A2A2A),
+        borderRadius: BorderRadius.circular(radius),
+      ),
+    );
+  }
+}
+
+class _SkeletonCover extends StatelessWidget {
+  const _SkeletonCover();
+
+  @override
+  Widget build(BuildContext context) {
+    return AspectRatio(
+      aspectRatio: 1,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: const Color(0xFF2A2A2A),
+          borderRadius: BorderRadius.circular(10),
+        ),
       ),
     );
   }
@@ -398,121 +276,289 @@ class WaveHomeScreenState extends State<WaveHomeScreen> {
 
 class _HeaderIcon extends StatelessWidget {
   final IconData icon;
+  final bool selected;
+  final String tooltip;
   final VoidCallback onTap;
-  final FocusNode? focusNode;
 
   const _HeaderIcon({
     required this.icon,
+    required this.selected,
+    required this.tooltip,
     required this.onTap,
-    this.focusNode,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Focus(
-      focusNode: focusNode,
-      onKeyEvent: (node, event) {
-        if (event is KeyDownEvent &&
-            (event.logicalKey == LogicalKeyboardKey.select ||
-                event.logicalKey == LogicalKeyboardKey.enter)) {
-          onTap();
-          return KeyEventResult.handled;
-        }
-        return KeyEventResult.ignored;
-      },
-      child: Builder(
-        builder: (context) {
-          final focused = Focus.of(context).hasFocus;
-          return GestureDetector(
-            onTap: onTap,
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 180),
-              width: 42,
-              height: 42,
-              decoration: BoxDecoration(
-                color: focused ? Colors.white.withOpacity(0.12) : AppTheme.cardColor,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: focused ? AppTheme.primaryColor : Colors.white.withOpacity(0.06),
-                ),
-              ),
-              child: Icon(icon, color: AppTheme.textPrimary, size: 20),
-            ),
-          );
-        },
+    return IconButton(
+      tooltip: tooltip,
+      onPressed: onTap,
+      icon: Icon(icon, color: selected ? Colors.black : Colors.white),
+      style: IconButton.styleFrom(
+        backgroundColor: selected ? Colors.white : AppTheme.surfaceColor,
+        fixedSize: const Size(48, 48),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
     );
   }
 }
 
-class _ApiKeySetup extends StatelessWidget {
-  final TextEditingController controller;
-  final bool isMobile;
-  final Future<void> Function() onSave;
-
-  const _ApiKeySetup({
-    required this.controller,
-    required this.isMobile,
-    required this.onSave,
-  });
+class _BackHomeButton extends StatelessWidget {
+  final VoidCallback onPressed;
+  const _BackHomeButton({required this.onPressed});
 
   @override
   Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: IconButton(
+        onPressed: onPressed,
+        icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+      ),
+    );
+  }
+}
+
+class _HomeBody extends StatelessWidget {
+  final VoidCallback? onSidebar;
+  const _HomeBody({this.onSidebar});
+
+  @override
+  Widget build(BuildContext context) {
+    final music = context.watch<WaveMusicProvider>();
+    final home = music.home;
+    if (home == null) return const SizedBox.shrink();
     final l10n = AppLocalizations.of(context);
-    final pad = isMobile ? AppTheme.spacingM : AppTheme.spacingXXL;
+
     return ListView(
-      padding: EdgeInsets.fromLTRB(pad, 24, pad, 80),
+      padding: EdgeInsets.only(bottom: waveMusicListBottomPadding(context)),
       children: [
-        Text(
-          l10n.translate('wave'),
-          style: const TextStyle(
-            color: AppTheme.textPrimary,
-            fontSize: 28,
-            fontWeight: FontWeight.w900,
-            letterSpacing: 1.4,
+        if (music.recents.isNotEmpty)
+          _TrackRow(
+            title: l10n.translate('music_recent'),
+            tracks: music.recents.map((e) => e.track).take(10).toList(),
+            onSidebar: onSidebar,
           ),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          l10n.translate('wave_subtitle'),
-          style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
-        ),
-        const SizedBox(height: 28),
-        Text(
-          l10n.translate('wave_api_needed'),
-          style: const TextStyle(
-            color: AppTheme.textPrimary,
-            fontSize: 16,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-        const SizedBox(height: 10),
-        Text(
-          l10n.translate('wave_api_needed_body'),
-          style: const TextStyle(color: AppTheme.textSecondary, height: 1.45),
-        ),
-        const SizedBox(height: 20),
-        TextField(
-          controller: controller,
-          obscureText: true,
-          style: const TextStyle(color: AppTheme.textPrimary),
-          decoration: InputDecoration(
-            hintText: l10n.translate('wave_api_hint'),
-            hintStyle: const TextStyle(color: AppTheme.textTertiary),
-            filled: true,
-            fillColor: AppTheme.cardColor,
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide.none,
+        _TrackRow(title: l10n.translate('music_quick_picks'), tracks: home.quickPicks, onSidebar: onSidebar),
+        _TrackRow(title: l10n.translate('music_trending'), tracks: home.trending, onSidebar: onSidebar),
+        _TrackRow(title: l10n.translate('music_popular_songs'), tracks: home.popularSongs, onSidebar: onSidebar),
+        _ArtistRow(title: l10n.translate('music_popular_artists'), artists: home.popularArtists, onSidebar: onSidebar),
+        _AlbumRow(title: l10n.translate('music_new_releases'), albums: home.newReleases, onSidebar: onSidebar),
+        _AlbumRow(title: l10n.translate('music_albums'), albums: home.albums, onSidebar: onSidebar),
+        _PlaylistRow(title: l10n.translate('music_playlists'), playlists: home.playlists, onSidebar: onSidebar),
+        _TrackRow(title: l10n.translate('music_recommended'), tracks: home.recommended, onSidebar: onSidebar),
+      ],
+    );
+  }
+}
+
+class _TrackRow extends StatelessWidget {
+  final String title;
+  final List<WaveMusicTrack> tracks;
+  final VoidCallback? onSidebar;
+  const _TrackRow({required this.title, required this.tracks, this.onSidebar});
+
+  @override
+  Widget build(BuildContext context) {
+    if (tracks.isEmpty) return const SizedBox.shrink();
+    final music = context.watch<WaveMusicProvider>();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _SectionTitle(title),
+        ...tracks.take(5).map(
+              (t) => WaveMusicTrackTile(
+                track: t,
+                playing: music.currentTrack?.id == t.id,
+                onTap: () => music.playTrack(t, contextQueue: tracks),
+                onLike: () => music.toggleLike(t),
+                onMore: () => showWaveMusicTrackActions(context, t),
+                onMoveToSidebar: onSidebar,
+              ),
+            ),
+      ],
+    );
+  }
+}
+
+class _AlbumRow extends StatelessWidget {
+  final String title;
+  final List<WaveMusicAlbum> albums;
+  final VoidCallback? onSidebar;
+  const _AlbumRow({required this.title, required this.albums, this.onSidebar});
+
+  @override
+  Widget build(BuildContext context) {
+    if (albums.isEmpty) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _SectionTitle(title),
+        SizedBox(
+          height: 210,
+          child: ListView.separated(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            scrollDirection: Axis.horizontal,
+            itemCount: albums.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 12),
+            itemBuilder: (context, i) => WaveMusicAlbumCard(
+              album: albums[i],
+              onMoveToSidebar: onSidebar,
+              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => WaveMusicAlbumScreen(albumId: albums[i].id))),
             ),
           ),
         ),
-        const SizedBox(height: 16),
-        ElevatedButton(
-          onPressed: () => onSave(),
-          child: Text(l10n.translate('wave_api_save')),
+      ],
+    );
+  }
+}
+
+class _ArtistRow extends StatelessWidget {
+  final String title;
+  final List<WaveMusicArtist> artists;
+  final VoidCallback? onSidebar;
+  const _ArtistRow({required this.title, required this.artists, this.onSidebar});
+
+  @override
+  Widget build(BuildContext context) {
+    if (artists.isEmpty) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _SectionTitle(title),
+        SizedBox(
+          height: 210,
+          child: ListView.separated(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            scrollDirection: Axis.horizontal,
+            itemCount: artists.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 12),
+            itemBuilder: (context, i) => WaveMusicArtistCard(
+              artist: artists[i],
+              onMoveToSidebar: onSidebar,
+              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => WaveMusicArtistScreen(artistId: artists[i].id))),
+            ),
+          ),
         ),
       ],
+    );
+  }
+}
+
+class _PlaylistRow extends StatelessWidget {
+  final String title;
+  final List<WaveMusicPlaylist> playlists;
+  final VoidCallback? onSidebar;
+  const _PlaylistRow({required this.title, required this.playlists, this.onSidebar});
+
+  @override
+  Widget build(BuildContext context) {
+    if (playlists.isEmpty) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _SectionTitle(title),
+        SizedBox(
+          height: 210,
+          child: ListView.separated(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            scrollDirection: Axis.horizontal,
+            itemCount: playlists.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 12),
+            itemBuilder: (context, i) => WaveMusicPlaylistCard(
+              playlist: playlists[i],
+              onMoveToSidebar: onSidebar,
+              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => WaveMusicPlaylistScreen(playlistId: playlists[i].id))),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _TrackList extends StatelessWidget {
+  final List<WaveMusicTrack> tracks;
+  final String empty;
+  final Widget? header;
+  const _TrackList({required this.tracks, required this.empty, this.header});
+
+  @override
+  Widget build(BuildContext context) {
+    final music = context.watch<WaveMusicProvider>();
+    if (tracks.isEmpty) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (header != null) header!,
+          Expanded(child: Center(child: Text(empty, style: const TextStyle(color: Colors.white38)))),
+        ],
+      );
+    }
+    return ListView.builder(
+      padding: EdgeInsets.only(bottom: waveMusicListBottomPadding(context)),
+      itemCount: tracks.length + (header != null ? 1 : 0),
+      itemBuilder: (context, i) {
+        if (header != null && i == 0) return header!;
+        final index = header != null ? i - 1 : i;
+        final track = tracks[index];
+        return WaveMusicTrackTile(
+          track: track,
+          index: index + 1,
+          playing: music.currentTrack?.id == track.id,
+          onTap: () => music.playTracks(tracks, startIndex: index),
+          onLike: () => music.toggleLike(track),
+          onMore: () => showWaveMusicTrackActions(context, track),
+        );
+      },
+    );
+  }
+}
+
+class _PlaylistBody extends StatelessWidget {
+  final VoidCallback onCreate;
+  final VoidCallback onBack;
+  const _PlaylistBody({required this.onCreate, required this.onBack});
+
+  @override
+  Widget build(BuildContext context) {
+    final music = context.watch<WaveMusicProvider>();
+    final all = [...music.userPlaylists, ...music.catalogPlaylists];
+    return ListView(
+      padding: EdgeInsets.fromLTRB(8, 0, 16, waveMusicListBottomPadding(context)),
+      children: [
+        Row(
+          children: [
+            _BackHomeButton(onPressed: onBack),
+            const Spacer(),
+            OutlinedButton.icon(onPressed: onCreate, icon: const Icon(Icons.add), label: const Text('New playlist')),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          children: all
+              .map(
+                (p) => WaveMusicPlaylistCard(
+                  playlist: p,
+                  onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => WaveMusicPlaylistScreen(playlistId: p.id))),
+                ),
+              )
+              .toList(),
+        ),
+      ],
+    );
+  }
+}
+
+class _SectionTitle extends StatelessWidget {
+  final String text;
+  const _SectionTitle(this.text);
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 18, 16, 8),
+      child: Text(text.toUpperCase(), style: const TextStyle(color: Colors.white54, fontWeight: FontWeight.w900, letterSpacing: 1.4, fontSize: 12)),
     );
   }
 }

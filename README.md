@@ -162,7 +162,14 @@ flutter build apk --release --target-platform android-arm64
 
 ## License
 
-This project is licensed under the MIT License.
+WAVE is free software licensed under the **GNU General Public License v3.0 or later**.
+See the `LICENSE` file. You may use, modify, and redistribute WAVE under those terms,
+and you must keep that license when you distribute the app or a modified version.
+
+WAVE MUSIC uses [NewPipe Extractor](https://github.com/TeamNewPipe/NewPipeExtractor)
+v0.26.5 as a library dependency. That library is also GPL-3.0-or-later. Its
+copyright stays with NewPipe e.V. and the NewPipe contributors. WAVE does not
+copy the NewPipe application, UI, or branding.
 
 ## Support
 

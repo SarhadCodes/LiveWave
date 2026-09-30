@@ -18,7 +18,7 @@ class CustomBottomNav extends StatelessWidget {
     _BottomNavItem(icon: Icons.sensors_rounded, label: 'Live'),
     _BottomNavItem(icon: Icons.movie_filter_rounded, label: 'Movies'),
     _BottomNavItem(assetPath: NavBarAssets.tvShow, label: 'Shows'),
-    _BottomNavItem(icon: Icons.graphic_eq_rounded, label: 'Wave'),
+    _BottomNavItem(icon: Icons.graphic_eq_rounded, label: 'Music'),
     _BottomNavItem(assetPath: NavBarAssets.search, label: 'Search'),
     _BottomNavItem(assetPath: NavBarAssets.settings, label: 'Settings'),
   ];

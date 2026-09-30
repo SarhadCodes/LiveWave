@@ -26,6 +26,9 @@ jobs:
       - name: 📋 Flutter Version
         run: flutter --version
 
+      - name: 🔐 Local config stub
+        run: cp lib/config/wave_local.example.dart lib/config/wave_local.dart
+
       - name: 📦 Install Dependencies
         run: flutter pub get
 

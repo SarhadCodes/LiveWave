@@ -9,7 +9,10 @@ import 'package:http/http.dart' as http;
 import 'dart:async';
 import 'dart:convert';
 import 'package:live_wave/config/app_theme.dart';
+import 'dart:io';
+
 import 'package:live_wave/iptv_exo_player.dart';
+import 'package:live_wave/vod_player.dart';
 import 'package:live_wave/providers/watch_history_provider.dart';
 import 'package:live_wave/services/subtitle_service.dart';
 import 'package:live_wave/services/firestore_service.dart';
@@ -55,7 +58,7 @@ class MediaCustomPlayerScreen extends StatefulWidget {
 
 class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen>
     with WidgetsBindingObserver {
-  IptvExoPlayerController? _exoPlayer;
+  VodPlayerHandle? _exoPlayer;
   static const _utilsChannel = MethodChannel('com.livewave.player/utils');
   // State
   bool _isLoading = true;
@@ -156,6 +159,11 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen>
   }
 
   int? get _historyContentId => widget.contentId ?? widget.tmdbId;
+
+  VodPlayerHandle _newVodPlayer() {
+    if (Platform.isIOS) return IosVodPlayerController();
+    return IptvExoPlayerController();
+  }
 
   @override
   void didChangeDependencies() {
@@ -543,7 +551,7 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen>
     final url = _videoUrl;
     if (url == null || url.isEmpty) return;
     try {
-      _exoPlayer ??= IptvExoPlayerController();
+      _exoPlayer ??= _newVodPlayer();
       _exoPlayer!.onEvent = (event, data) {
         if (_didSeekResume) return;
         final ready = event == 'firstFrameRendered' ||
@@ -1248,7 +1256,7 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen>
   }
 
   Widget _buildTexturePlayer() {
-    final player = (_exoPlayer ??= IptvExoPlayerController()).buildView();
+    final player = (_exoPlayer ??= _newVodPlayer()).buildView();
     switch (_aspectRatioIndex) {
       case 1:
         return Positioned.fill(

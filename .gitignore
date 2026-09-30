@@ -44,7 +44,7 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
-# Local Wave / YouTube API key — never commit
+# Local Wave secrets — never commit
 lib/config/wave_local.dart
 
 # Telegram ingest worker secrets and local data

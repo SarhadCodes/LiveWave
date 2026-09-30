@@ -62,7 +62,7 @@ class NavigationSidebarState extends State<NavigationSidebar>
     _NavItemData(icon: Icons.sensors_rounded, label: 'Live'),
     _NavItemData(icon: Icons.movie_filter_rounded, label: 'Movies'),
     _NavItemData(assetPath: NavBarAssets.tvShow, label: 'Shows'),
-    _NavItemData(icon: Icons.graphic_eq_rounded, label: 'Wave'),
+    _NavItemData(icon: Icons.graphic_eq_rounded, label: 'Music'),
     _NavItemData(assetPath: NavBarAssets.search, label: 'Search'),
   ];
 

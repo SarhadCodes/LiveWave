@@ -57,7 +57,7 @@ dependencies:
   dio: ^5.4.0
   url_launcher: ^6.2.0
   webview_flutter: ^4.7.0
-  youtube_player_iframe: ^6.0.2
+  video_player: ^2.9.5
   wakelock_plus: ^1.2.11
   liquid_pull_to_refresh: ^3.0.1
   path_provider: ^2.1.0

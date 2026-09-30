@@ -1,60 +1,87 @@
-# Wave setup — YouTube Data API v3
+# WAVE MUSIC
 
-Wave uses the **YouTube Data API v3** for discovery and the **official YouTube IFrame Player** for playback.
+WAVE MUSIC is the music tab in Live Wave.
 
-Live Wave does **not** download, proxy, restream, or extract YouTube media URLs.
+## Catalog
 
-## 1. Create an API key
+Production uses **NewPipe Extractor v0.26.5** (GPL-3.0-or-later) on Android for
+YouTube / YouTube Music search, metadata, and audio-only stream extraction.
+No YouTube Data API key is required for that path. Playback stays in the
+existing Media3 engine. Stream URLs are temporary and are not stored.
 
-1. Open [Google Cloud Console](https://console.cloud.google.com/).
-2. Create or select a project.
-3. Enable **YouTube Data API v3**.
-4. Create an **API key**.
-5. Restrict the key:
-   - API restriction: **YouTube Data API v3** only
-   - Application restriction: **Android apps**
-     - Package: `com.livewave.kurdlogs.live_wave`
-     - SHA-1: `43:FE:94:2D:48:2F:15:EE:F5:88:9F:5E:4C:35:7E:C9:5E:AE:FC:D6`
+The UI never talks to SoundCloud response objects directly. It consumes
+`WaveMusicTrack` / album / artist / playlist models via `WaveMusicService`.
 
-Wave sends `X-Android-Package` and `X-Android-Cert` on Data API requests so an Android-restricted key can be used from Flutter HTTP.
-
-If Wave says the key is blocked:
-1. Confirm **YouTube Data API v3** is enabled on that same Google Cloud project.
-2. Do **not** restrict this key to HTTP referrers.
-3. Temporarily set Application restriction to **None**. If Wave then loads, add the Android package + SHA-1 again.
-
-A key shipped inside the client app is **not a perfect secret**. Restrictions reduce abuse. Do not enable unrelated Google APIs on this key. Do not reuse the Firebase Android key for Wave.
-
-## 2. Give the key to Live Wave
-
-**Option A — compile time (recommended for release builds)**
+Playback uses the existing native **Media3 / ExoPlayer** music engine (separate
+from IPTV). Flutter resolves a temporary SoundCloud stream immediately before
+play:
 
 ```
-flutter run --dart-define=YOUTUBE_API_KEY=YOUR_KEY
-flutter build apk --dart-define=YOUTUBE_API_KEY=YOUR_KEY
+SoundCloud API
+  → WaveMusicCatalog / WaveMusicTrack
+  → WaveMusicPlaybackResolver
+  → WaveMusicPlayer
+  → WaveMusicEngine (Media3)
 ```
 
-**Option B — local file (gitignored)**
+Only tracks SoundCloud marks as `access=playable` are treated as playable.
+Preview-only and blocked tracks are not streamed and are not presented as
+full tracks. WAVE does **not** extract YouTube media, use YouTube as a music
+source, scrape audio, or bypass DRM, BotGuard, geo, or paywall restrictions.
 
-Copy `lib/config/wave_local.example.dart` to `lib/config/wave_local.dart` and paste the key. That file is gitignored and must not be committed.
+Stream URLs expire. They are resolved just-in-time, kept only in a short
+in-memory cache, and never written to disk. If Media3 fails because a URL
+expired, WAVE resolves a fresh stream once and retries playback once.
 
-**Option C — in the app**
+Preferred stream format (official SoundCloud transcodings):
+1. `hls_aac_160_url` (HLS AAC 160 kbps)
+2. `hls_aac_96_url` (HLS AAC 96 kbps fallback)
 
-Open the **Wave** tab and paste the key into the setup field. It is stored locally in SharedPreferences (`youtube_api_key`) on this device only.
+## SoundCloud API credentials
 
-## 3. Playback
+Register an application at [SoundCloud You Apps](https://soundcloud.com/you/apps)
+(Artist Pro is required by SoundCloud for API keys). WAVE uses the official
+**Client Credentials** flow for public search and playback. That flow requires
+both a Client ID and a Client Secret. Do not commit either value.
 
-Playback uses the official IFrame Player (`youtube_player_iframe`). YouTube controls, branding, ads, and restrictions stay intact.
+Resolve order:
+1. `--dart-define=SOUNDCLOUD_CLIENT_ID=...`
+2. `--dart-define=SOUNDCLOUD_CLIENT_SECRET=...`
+3. gitignored `lib/config/wave_local.dart` (`kSoundCloudClientId`, `kSoundCloudClientSecret`)
 
-## 4. Quota
+Copy `lib/config/wave_local.example.dart` to `lib/config/wave_local.dart` and
+fill in the SoundCloud fields, **or** pass dart-defines at build time:
 
-Default quota is typically 10,000 units/day.
+```
+flutter run --dart-define=SOUNDCLOUD_CLIENT_ID=your_id --dart-define=SOUNDCLOUD_CLIENT_SECRET=your_secret
+flutter build apk --release --dart-define=SOUNDCLOUD_CLIENT_ID=your_id --dart-define=SOUNDCLOUD_CLIENT_SECRET=your_secret
+```
 
-- `search.list` is expensive (100 units)
-- `videos.list`, `channels.list`, and `playlistItems.list` are cheap (1 unit)
+Client credentials tokens are limited (50 tokens / 12 hours per app). WAVE
+reuses and refreshes the token; do not request a new token on every play.
 
-Wave caches feeds, debounces search, hydrates video IDs in batches, and loads category shelves on demand.
+Never put the Client Secret in source control, logs, or error messages.
 
-## 5. Follow / Watch Later / History
+## Attribution
 
-These are **Live Wave** features stored on the device. They are not YouTube subscriptions, playlists, or account history.
+Custom SoundCloud playback requires attribution per the official API Terms of
+Use and Buttons & Logos guide:
+
+1. Credit the uploader as the creator of the track
+2. Credit SoundCloud as the source
+3. Link to the SoundCloud `permalink_url`
+
+WAVE MUSIC shows this on the full player and credits SoundCloud on the music
+home screen and app info screen.
+
+## Optional catalogs (not the default)
+
+These are not used unless you opt in:
+
+- `--dart-define=WAVE_MUSIC_AUDIUS=true` — Audius as the primary catalog
+- `--dart-define=WAVE_MUSIC_ITUNES=true` — iTunes 30-second previews
+- `--dart-define=WAVE_MUSIC_YOUTUBE=true` — YouTube Data API v3 metadata only (no YouTube playback)
+
+Lyrics come from the public **LRCLIB** API. If none exist, the app shows “Lyrics unavailable”.
+
+Telegram ingest still uses `kTelegramIngestBaseUrl` in gitignored `lib/config/wave_local.dart`.

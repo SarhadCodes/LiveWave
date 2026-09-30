@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'app_typography.dart';
+
 class AppTheme {
   // Ultra-premium dark gray and white color palette
   static const Color primaryColor = Color(0xFFFFFFFF); // Pure white
@@ -40,111 +42,54 @@ class AppTheme {
   }
 
   // Dark theme configuration
-  static ThemeData get darkTheme {
+  static ThemeData get darkTheme => darkThemeFor('en');
+
+  static ThemeData darkThemeFor(String language) {
+    final text = AppTypography.textTheme(
+      language,
+      primary: textPrimary,
+      secondary: textSecondary,
+      tertiary: textTertiary,
+    );
     return ThemeData(
       useMaterial3: true,
       brightness: Brightness.dark,
-      fontFamily: 'K24Kurdish',
-      
-      // Color scheme
+      fontFamily: AppTypography.fontFamily(language),
       colorScheme: const ColorScheme.dark(
         primary: primaryColor,
         secondary: secondaryColor,
         surface: surfaceColor,
         error: accentRed,
       ),
-      
-      // Scaffold
       scaffoldBackgroundColor: backgroundColor,
-      
-      // App Bar
-      appBarTheme: const AppBarTheme(
+      appBarTheme: AppBarTheme(
         backgroundColor: backgroundColor,
         elevation: 0,
         centerTitle: false,
-        titleTextStyle: TextStyle(
-          color: textPrimary,
-          fontSize: 24,
-          fontWeight: FontWeight.bold,
-        ),
+        titleTextStyle: text.headlineSmall?.copyWith(fontSize: 22, color: textPrimary),
       ),
-      
-      // Card
       cardTheme: CardThemeData(
         color: cardColor,
         elevation: 2,
-        shadowColor: Colors.black.withOpacity(0.5),
+        shadowColor: Colors.black.withValues(alpha: 0.5),
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(10),
         ),
       ),
-      
-      // Text theme
-      textTheme: const TextTheme(
-        displayLarge: TextStyle(
-          color: textPrimary,
-          fontSize: 32,
-          fontWeight: FontWeight.bold,
-        ),
-        displayMedium: TextStyle(
-          color: textPrimary,
-          fontSize: 28,
-          fontWeight: FontWeight.bold,
-        ),
-        displaySmall: TextStyle(
-          color: textPrimary,
-          fontSize: 24,
-          fontWeight: FontWeight.bold,
-        ),
-        headlineLarge: TextStyle(
-          color: textPrimary,
-          fontSize: 20,
-          fontWeight: FontWeight.w600,
-        ),
-        headlineMedium: TextStyle(
-          color: textPrimary,
-          fontSize: 18,
-          fontWeight: FontWeight.w600,
-        ),
-        headlineSmall: TextStyle(
-          color: textPrimary,
-          fontSize: 16,
-          fontWeight: FontWeight.w600,
-        ),
-        bodyLarge: TextStyle(
-          color: textPrimary,
-          fontSize: 16,
-        ),
-        bodyMedium: TextStyle(
-          color: textSecondary,
-          fontSize: 14,
-        ),
-        bodySmall: TextStyle(
-          color: textTertiary,
-          fontSize: 12,
-        ),
-      ),
-      
-      // Focus theme for TV
+      textTheme: text,
       focusColor: focusColor,
-      
-      // Text selection theme
       textSelectionTheme: TextSelectionThemeData(
         cursorColor: primaryColor,
-        selectionColor: primaryColor.withOpacity(0.3),
+        selectionColor: primaryColor.withValues(alpha: 0.3),
         selectionHandleColor: primaryColor,
       ),
-
-      // Elevated Button Theme for Premium Interaction
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
           backgroundColor: primaryColor,
           foregroundColor: backgroundColor,
-          textStyle: const TextStyle(fontWeight: FontWeight.bold),
+          textStyle: const TextStyle(fontWeight: FontWeight.w600, letterSpacing: -0.2),
         ),
       ),
-
-      // Icon theme
       iconTheme: const IconThemeData(
         color: textPrimary,
       ),

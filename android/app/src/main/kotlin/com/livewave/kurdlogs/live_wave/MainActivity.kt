@@ -22,6 +22,7 @@ class MainActivity : FlutterFragmentActivity() {
     private var wavePipChannel: MethodChannel? = null
     private var wavePipEnabled = false
     private var iptvExoPlugin: com.livewave.kurdlogs.live_wave.playback.IptvExoPlayerPlugin? = null
+    private var waveMusicPlugin: com.livewave.kurdlogs.live_wave.music.WaveMusicPlayerPlugin? = null
 
     private val playerBackCallback = object : OnBackPressedCallback(false) {
         override fun handleOnBackPressed() {
@@ -137,11 +138,18 @@ class MainActivity : FlutterFragmentActivity() {
             applicationContext,
             flutterEngine,
         ).also { it.register() }
+
+        waveMusicPlugin = com.livewave.kurdlogs.live_wave.music.WaveMusicPlayerPlugin(
+            applicationContext,
+            flutterEngine,
+        ).also { it.register() }
     }
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
         iptvExoPlugin?.unregister()
         iptvExoPlugin = null
+        waveMusicPlugin?.unregister()
+        waveMusicPlugin = null
         wavePipEnabled = false
         wavePipChannel = null
         super.cleanUpFlutterEngine(flutterEngine)

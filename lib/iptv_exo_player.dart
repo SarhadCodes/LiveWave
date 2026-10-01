@@ -5,12 +5,13 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'ios_live_player.dart';
 import 'live_stream_config.dart';
 import 'vod_player.dart';
 
 /// FastTV-style native ExoPlayer → Flutter Texture bridge.
 /// One texture, one ExoPlayer — reused across channel switches.
-class IptvExoPlayerController implements VodPlayerHandle {
+class IptvExoPlayerController implements VodPlayerHandle, LivePlayerHandle {
   IptvExoPlayerController();
 
   static const _channel = MethodChannel('iptv_exo_player');
@@ -40,6 +41,7 @@ class IptvExoPlayerController implements VodPlayerHandle {
 
   Timer? _stallTimer;
 
+  @override
   bool get isDisposed => _disposed;
 
   bool get hasActiveSource => _hasSource;
@@ -48,6 +50,7 @@ class IptvExoPlayerController implements VodPlayerHandle {
   bool get hasError => _hasError;
   bool get hasVideoFrame => _hasFrame;
   bool get surfaceAttached => _surfaceAttached;
+  @override
   bool get shouldShowLoading =>
       _textureId == null || (_hasSource && !_hasFrame && !_hasError);
 
@@ -116,8 +119,9 @@ class IptvExoPlayerController implements VodPlayerHandle {
   }
 
   /// Wait until native surface is attached to ExoPlayer.
+  @override
   Future<void> waitForSurface({Duration timeout = const Duration(seconds: 10)}) {
-    if (_surfaceAttached) return Future.value();
+    if (kIsWeb || !Platform.isAndroid || _surfaceAttached) return Future.value();
     _surfaceCompleter ??= Completer<void>();
     if (_surfaceCompleter!.isCompleted) return Future.value();
     return _surfaceCompleter!.future.timeout(timeout, onTimeout: () {
@@ -126,6 +130,7 @@ class IptvExoPlayerController implements VodPlayerHandle {
   }
 
   /// Live IPTV — HLS first, reuses ExoPlayer (no recreate).
+  @override
   Future<void> setLiveChannel(String url, {Map<String, String>? headers}) async {
     if (kIsWeb || !Platform.isAndroid || _disposed) return;
     final trimmed = url.trim();
@@ -214,6 +219,7 @@ class IptvExoPlayerController implements VodPlayerHandle {
   }
 
   /// Retry MediaSource / HTTP only — never recreates ExoPlayer.
+  @override
   Future<void> retry() async {
     _hasError = false;
     _hasFrame = false;

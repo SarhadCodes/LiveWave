@@ -36,11 +36,13 @@ class WaveMusicPlayer {
   String? currentMediaId;
 
   bool get isAndroid => !kIsWeb && Platform.isAndroid;
+  bool get isIos => !kIsWeb && Platform.isIOS;
+  bool get _hasEngine => isAndroid || isIos;
 
   Future<void> bind() async {
     if (_bound) return;
     _bound = true;
-    if (!isAndroid) return;
+    if (!_hasEngine) return;
     _sub = _events.receiveBroadcastStream().listen(_onEvent, onError: (_) {});
     try {
       await _channel.invokeMethod('warmUp');
@@ -49,8 +51,8 @@ class WaveMusicPlayer {
 
   Future<void> setQueue(List<WaveMusicTrack> tracks, {int startIndex = 0, bool play = true}) async {
     error.value = null;
-    if (!isAndroid) {
-      error.value = 'Music playback is available on Android.';
+    if (!_hasEngine) {
+      error.value = 'Music playback is not available on this device.';
       return;
     }
     if (tracks.isEmpty) return;
@@ -77,12 +79,12 @@ class WaveMusicPlayer {
   }
 
   Future<void> play() async {
-    if (!isAndroid) return;
+    if (!_hasEngine) return;
     await _channel.invokeMethod('play');
   }
 
   Future<void> pause() async {
-    if (!isAndroid) return;
+    if (!_hasEngine) return;
     await _channel.invokeMethod('pause');
   }
 
@@ -95,39 +97,39 @@ class WaveMusicPlayer {
   }
 
   Future<void> next() async {
-    if (!isAndroid) return;
+    if (!_hasEngine) return;
     await _channel.invokeMethod('next');
   }
 
   Future<void> previous() async {
-    if (!isAndroid) return;
+    if (!_hasEngine) return;
     await _channel.invokeMethod('previous');
   }
 
   Future<void> seek(Duration to) async {
-    if (!isAndroid) return;
+    if (!_hasEngine) return;
     await _channel.invokeMethod('seek', {'positionMs': to.inMilliseconds});
   }
 
   Future<void> setShuffle(bool enabled) async {
     shuffle = enabled;
-    if (!isAndroid) return;
+    if (!_hasEngine) return;
     await _channel.invokeMethod('setShuffle', {'enabled': enabled});
   }
 
   Future<void> setRepeat(WaveMusicRepeatMode mode) async {
     repeat = mode;
-    if (!isAndroid) return;
+    if (!_hasEngine) return;
     await _channel.invokeMethod('setRepeat', {'mode': mode.name});
   }
 
   Future<void> setVolume(double volume) async {
-    if (!isAndroid) return;
+    if (!_hasEngine) return;
     await _channel.invokeMethod('setVolume', {'volume': volume.clamp(0.0, 1.0)});
   }
 
   Future<void> stop() async {
-    if (!isAndroid) return;
+    if (!_hasEngine) return;
     await _channel.invokeMethod('stop');
     playing.value = false;
     position.value = Duration.zero;

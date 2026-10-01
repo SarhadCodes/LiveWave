@@ -64,6 +64,7 @@
 	<string>WAVE needs permission to save images to your photo library.</string>
 	<key>UIBackgroundModes</key>
 	<array>
+		<string>audio</string>
 		<string>fetch</string>
 		<string>remote-notification</string>
 	</array>

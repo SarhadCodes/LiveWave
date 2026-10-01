@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'dart:io';
 import 'package:provider/provider.dart';
 import '../config/app_theme.dart';
 import '../config/xtream_config.dart';
@@ -179,8 +180,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
               _buildCategoryOrderSection(isMobile, l10n),
               const SizedBox(height: 20),
               _buildDownloadsSection(isMobile, l10n),
-              const SizedBox(height: 20),
-              _buildUpdateSection(isMobile, l10n),
+              if (!Platform.isIOS) ...[
+                const SizedBox(height: 20),
+                _buildUpdateSection(isMobile, l10n),
+              ],
               const SizedBox(height: 40),
               _buildFooter(l10n),
               const SizedBox(height: 60),
@@ -304,14 +307,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
         subtitle: 'Offline media',
         icon: Icons.download_rounded,
       ),
-      TvSettingsEntry(
-        id: 'update',
-        section: 'System',
-        title: 'Software update',
-        subtitle: 'Check for new version',
-        icon: Icons.system_update_rounded,
-      ),
     ]);
+    if (!Platform.isIOS) {
+      entries.add(
+        TvSettingsEntry(
+          id: 'update',
+          section: 'System',
+          title: 'Software update',
+          subtitle: 'Check for new version',
+          icon: Icons.system_update_rounded,
+        ),
+      );
+    }
 
     return entries;
   }
@@ -338,6 +345,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       case 'downloads':
         return _buildTvDownloadsDetail();
       case 'update':
+        if (Platform.isIOS) return const SizedBox.shrink();
         return _buildTvUpdateDetail();
       default:
         return const SizedBox.shrink();

@@ -62,6 +62,8 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen>
   static const _utilsChannel = MethodChannel('com.livewave.player/utils');
   // State
   bool _isLoading = true;
+  bool _searchCancelled = false;
+  bool _leavingSearch = false;
   String _statusMessage = 'INITIALIZING...';
   bool _showControls = true;
   Timer? _hideTimer;
@@ -223,7 +225,18 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen>
     prefs.setInt('player_aspectRatio', _aspectRatioIndex);
   }
 
+  bool get _searchStopped => _searchCancelled || !mounted;
+
+  void _cancelSearchAndLeave() {
+    if (_leavingSearch) return;
+    _leavingSearch = true;
+    _searchCancelled = true;
+    _serverTimeoutTimer?.cancel();
+    if (mounted) Navigator.of(context).pop();
+  }
+
   Future<void> _startPlaybackSequence() async {
+    if (_searchStopped) return;
     if (widget.customUrl != null && widget.customUrl!.isNotEmpty) {
       _videoUrl = widget.customUrl;
       _subtitleUrl = widget.customSubtitleUrl;
@@ -294,7 +307,7 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen>
     const batchSize = 25; // Try 25 URLs at a time to prevent socket exhaustion
     
     for (int i = 0; i < videoUrlsToTry.length; i += batchSize) {
-      if (foundVideoUrl != null) break;
+      if (_searchStopped || foundVideoUrl != null) break;
       
       final chunk = videoUrlsToTry.sublist(i, (i + batchSize > videoUrlsToTry.length) ? videoUrlsToTry.length : i + batchSize);
       
@@ -306,8 +319,11 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen>
         return null;
       }));
       
+      if (_searchStopped) return;
       foundVideoUrl = chunkResults.firstWhere((r) => r != null, orElse: () => null);
     }
+
+    if (_searchStopped) return;
 
     // 3. If video is found, find the matching subtitle in the same folder
     if (foundVideoUrl != null) {
@@ -357,6 +373,7 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen>
       }
 
       for (var subUrl in subUrlsToTry) {
+        if (_searchStopped) return;
         try {
           final res = await http.get(Uri.parse('$subUrl?t=${DateTime.now().millisecondsSinceEpoch}'), headers: {'Range': 'bytes=0-1024'}).timeout(const Duration(seconds: 3));
           if (res.statusCode == 200 || res.statusCode == 206) {
@@ -372,8 +389,10 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen>
       return;
     }
 
+    if (_searchStopped) return;
     setState(() => _statusMessage = 'CHECKING OVERRIDES...');
     final override = await _firestoreService.getMediaOverride(widget.tmdbId!, isMovie: widget.isMovie);
+    if (_searchStopped) return;
     if (override != null) {
       if (widget.isMovie) {
         _videoUrl = override['url'];
@@ -397,6 +416,7 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen>
   }
 
   void _startSmartServerSearch() {
+    if (_searchStopped) return;
     _serverTimeoutTimer?.cancel();
     
     if (_currentServerIndex >= _servers.length) {
@@ -414,9 +434,10 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen>
     _extractorController = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..addJavaScriptChannel('Extractor', onMessageReceived: (msg) {
+        if (_searchStopped) return;
         try {
           final data = jsonDecode(msg.message);
-          if (data['url'] != null && _videoUrl == null) {
+          if (data['url'] != null && _videoUrl == null && !_searchCancelled) {
             _serverTimeoutTimer?.cancel();
             setState(() { _videoUrl = data['url']; _isLoading = false; });
             _onMediaFound();
@@ -461,6 +482,7 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen>
 
     // Fallback to next server if this one fails after 12 seconds
     _serverTimeoutTimer = Timer(const Duration(seconds: 12), () {
+      if (_searchStopped) return;
       if (_videoUrl == null && mounted) {
         _currentServerIndex++;
         _startSmartServerSearch();
@@ -469,7 +491,7 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen>
   }
 
   void _onMediaFound() {
-    if (!mounted) return;
+    if (_searchStopped) return;
     setState(() {
       _isLoading = false;
       _statusMessage = 'READY';
@@ -659,6 +681,8 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen>
 
   @override
   void dispose() {
+    _searchCancelled = true;
+    _serverTimeoutTimer?.cancel();
     unawaited(_saveWatchProgress());
     WidgetsBinding.instance.removeObserver(this);
     WakelockPlus.disable();
@@ -736,6 +760,10 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen>
       canPop: false,
       onPopInvoked: (didPop) {
         if (didPop) return;
+        if (_isLoading) {
+          _cancelSearchAndLeave();
+          return;
+        }
         if (_showSettings) {
           _closeSettings();
         } else {
@@ -749,15 +777,28 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen>
           if (!_isLoading && _videoUrl != null)
             _buildTexturePlayer(),
           if (_isLoading)
-            Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const CircularProgressIndicator(color: AppTheme.primaryColor),
-                  const SizedBox(height: 24),
-                  Text(_statusMessage.toUpperCase(), style: const TextStyle(color: Colors.white70, letterSpacing: 2)),
-                ],
-              ),
+            Stack(
+              children: [
+                Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const CircularProgressIndicator(color: AppTheme.primaryColor),
+                      const SizedBox(height: 24),
+                      Text(_statusMessage.toUpperCase(), style: const TextStyle(color: Colors.white70, letterSpacing: 2)),
+                    ],
+                  ),
+                ),
+                SafeArea(
+                  child: Align(
+                    alignment: Alignment.topLeft,
+                    child: IconButton(
+                      icon: const Icon(Icons.arrow_back, color: Colors.white),
+                      onPressed: _cancelSearchAndLeave,
+                    ),
+                  ),
+                ),
+              ],
             ),
           if (!_isLoading) _buildFlutterUI(),
           

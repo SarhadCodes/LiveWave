@@ -7,6 +7,7 @@ import '../models/wave_music_album.dart';
 import '../models/wave_music_artist.dart';
 import '../models/wave_music_playlist.dart';
 import '../models/wave_music_track.dart';
+import 'ios_youtube_music.dart';
 import 'wave_music_cache.dart';
 import 'wave_music_catalog.dart';
 
@@ -24,7 +25,7 @@ class NewPipeMusicCatalog implements WaveMusicCatalogService {
   final Map<String, WaveMusicArtist> _artists = {};
   final Map<String, WaveMusicPlaylist> _playlists = {};
 
-  bool get _supported => !kIsWeb && Platform.isAndroid;
+  bool get _supported => !kIsWeb && (Platform.isAndroid || Platform.isIOS);
 
   @override
   Future<WaveMusicHomeData> getHome() async {
@@ -356,6 +357,7 @@ class NewPipeMusicCatalog implements WaveMusicCatalogService {
     if (!_supported) {
       throw StateError('YouTube Music search is available on Android.');
     }
+    if (Platform.isIOS) return IosYoutubeMusic.invoke(method, args);
     final raw = await _channel.invokeMethod<dynamic>(method, args);
     if (raw is List) return {'data': raw, 'items': raw};
     if (raw is Map) return Map<String, dynamic>.from(raw);

@@ -10,6 +10,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../config/app_theme.dart';
 import '../l10n/app_localizations.dart';
+import '../ios_live_player.dart';
 import '../iptv_exo_player.dart';
 import '../models/channel.dart';
 import '../providers/channels_provider.dart';
@@ -35,7 +36,7 @@ class PlayerScreen extends StatefulWidget {
 }
 
 class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver {
-  LiveExoPlayerController? _player;
+  LivePlayerHandle? _player;
 
   Timer? _securityTimer;
   Timer? _retryTimer;
@@ -80,11 +81,16 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
 
   bool _exitInProgress = false;
 
-  LiveExoPlayerController get _livePlayer {
+  LivePlayerHandle get _livePlayer {
     if (_player?.isDisposed == true) {
       _player = null;
     }
-    return _player ??= LiveExoPlayerController()..onEvent = _onPlayerEvent;
+    return _player ??= _createLivePlayer()..onEvent = _onPlayerEvent;
+  }
+
+  LivePlayerHandle _createLivePlayer() {
+    if (Platform.isIOS) return IosLivePlayerController();
+    return IptvExoPlayerController();
   }
 
   @override
@@ -165,6 +171,9 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   @override
   void didChangeMetrics() {
     if (!mounted || _exitInProgress) return;
+    // Re-applying orientation while iOS is mid-rotation rebuilds the route
+    // and leaves the channel spinner up with no surface.
+    if (Platform.isIOS) return;
     final views = WidgetsBinding.instance.platformDispatcher.views;
     if (views.isEmpty) return;
     final view = views.first;

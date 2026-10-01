@@ -12,6 +12,7 @@ class UpdateService {
   static const String _updateUrl = 'https://raw.githubusercontent.com/SarhadCodes/live_wave_updates/refs/heads/main/version.json';
 
   static Future<void> checkForUpdate(BuildContext context, {bool showNoUpdate = false}) async {
+    if (Platform.isIOS) return;
     try {
       debugPrint('[UpdateService] Manual Check Started');
       final response = await http.get(Uri.parse(_updateUrl)).timeout(const Duration(seconds: 15));

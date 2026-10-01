@@ -10,6 +10,9 @@ import UserNotifications
   ) -> Bool {
     UNUserNotificationCenter.current().delegate = self as UNUserNotificationCenterDelegate
     GeneratedPluginRegistrant.register(with: self)
+    if let registrar = self.registrar(forPlugin: "WaveMusicIosPlugin") {
+      WaveMusicIosPlugin.register(with: registrar)
+    }
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 }

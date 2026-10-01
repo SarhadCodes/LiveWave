@@ -1,7 +1,10 @@
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import '../models/wave_music_track.dart';
+import 'ios_youtube_music.dart';
 import 'soundcloud_api.dart';
 import 'wave_music_http.dart';
 
@@ -112,6 +115,13 @@ class WaveMusicPlaybackResolver {
   }
 
   Future<WaveMusicTrack> _fetchYouTube(WaveMusicTrack track, {required bool startPlayback}) async {
+    if (!kIsWeb && Platform.isIOS) {
+      final resolved = await IosYoutubeMusic.resolveTrack(track);
+      if (resolved.audioUrl.startsWith('http')) {
+        _streams[track.id] = _CachedStream(resolved.audioUrl, resolved.mimeType, resolved.streamHeaders);
+      }
+      return resolved;
+    }
     debugPrint('[WAVE_RESOLVER] resolve started id=${track.id} title=${track.title}');
     final url = track.permalinkUrl.trim();
     if (url.isEmpty) {

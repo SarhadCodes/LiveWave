@@ -315,13 +315,12 @@ final class WaveMusicIosPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
   private func emit(_ type: String, _ payload: [String: Any]) {
     var event = payload
     event["type"] = type
-    let send = { [weak self] in
-      self?.eventSink?(event)
-    }
     if Thread.isMainThread {
-      send()
+      eventSink?(event)
     } else {
-      DispatchQueue.main.async(execute: send)
+      DispatchQueue.main.async { [weak self] in
+        self?.eventSink?(event)
+      }
     }
   }
 

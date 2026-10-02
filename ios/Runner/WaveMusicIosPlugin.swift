@@ -907,11 +907,11 @@ final class WaveYtResourceLoader: NSObject, AVAssetResourceLoaderDelegate, URLSe
       return "public.m3u-playlist"
     }
     if lower.contains("audio/mp4") || lower.contains("m4a") {
-      return AVFileType.mpeg4Audio.rawValue
+      return AVFileType.m4a.rawValue
     }
     if lower.contains("mpeg") && !lower.contains("mp4") {
       return "public.mp3"
     }
-    return AVFileType.mpeg4Audio.rawValue
+    return AVFileType.m4a.rawValue
   }
 }

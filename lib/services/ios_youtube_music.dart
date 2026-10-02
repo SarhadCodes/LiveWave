@@ -76,8 +76,20 @@ class IosYoutubeMusic {
 
   static Future<List<Map<String, dynamic>>> _songs(String query, int limit) async {
     final q = query.trim().isEmpty ? 'music' : query.trim();
-    final results = await _yt.search.search(q);
-    return results.where((video) => _keep(video.title, video.duration)).take(limit).map(_trackMap).toList();
+    // search() maps every row through upload-date parsing and aborts the whole
+    // page when YouTube sends a compact value such as "Streamed 7h ago".
+    // searchContent returns the raw rows, so one odd date cannot drop the page.
+    final results = await _yt.search.searchContent(q, filter: TypeFilters.video);
+    final tracks = <Map<String, dynamic>>[];
+    for (final item in results) {
+      if (item is! SearchVideo || item.isLive) continue;
+      final duration = _clockDuration(item.duration);
+      if (!_keep(item.title, duration)) continue;
+      tracks.add(_trackMap(item, duration));
+      if (tracks.length >= limit) break;
+    }
+    debugPrint('[WAVE_IOS] catalog query=$q tracks=${tracks.length}');
+    return tracks;
   }
 
   static Future<Map<String, dynamic>> _search(String query, int limit) async {
@@ -107,19 +119,39 @@ class IosYoutubeMusic {
     };
   }
 
-  static Map<String, dynamic> _trackMap(Video video) {
-    final seconds = video.duration?.inSeconds ?? 0;
+  static Map<String, dynamic> _trackMap(SearchVideo video, Duration? duration) {
+    final seconds = duration?.inSeconds ?? 0;
+    final id = video.id.value;
     return {
       'type': 'track',
-      'id': video.id.value,
+      'id': id,
       'title': video.title,
       'artist': video.author,
-      'artistUrl': video.channelId.value,
+      'artistUrl': video.channelId,
       'album': '',
       'durationMs': seconds > 0 ? seconds * 1000 : 0,
-      'artworkUrl': video.thumbnails.mediumResUrl,
-      'url': video.url,
+      'artworkUrl': ThumbnailSet(id).mediumResUrl,
+      'url': 'https://www.youtube.com/watch?v=$id',
     };
+  }
+
+  static Duration? _clockDuration(String raw) {
+    final parts = raw.trim().split(':');
+    if (raw.trim().isEmpty || parts.isEmpty) return null;
+    final numbers = <int>[];
+    for (final part in parts) {
+      final value = int.tryParse(part.trim());
+      if (value == null) return null;
+      numbers.add(value);
+    }
+    if (numbers.length == 3) {
+      return Duration(hours: numbers[0], minutes: numbers[1], seconds: numbers[2]);
+    }
+    if (numbers.length == 2) {
+      return Duration(minutes: numbers[0], seconds: numbers[1]);
+    }
+    if (numbers.length == 1) return Duration(seconds: numbers[0]);
+    return null;
   }
 
   static bool _keep(String title, Duration? duration) {

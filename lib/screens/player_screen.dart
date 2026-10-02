@@ -278,16 +278,23 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       return;
     }
     final generation = _playbackGeneration;
+    final traceIos = Platform.isIOS;
+    if (traceIos) {
+      IosLivePlayerController.mark('tap channel=${_currentChannel.name}', reset: true);
+    }
     try {
       debugPrint('[Player] Playing channel=${_currentChannel.name}');
       await _livePlayer.ensureInitialized();
       if (!mounted || generation != _playbackGeneration) return;
+      if (traceIos) IosLivePlayerController.mark('player ensured');
       setState(() {});
       await WidgetsBinding.instance.endOfFrame;
       await _livePlayer.mountTextureAndAttachSurface();
       await _livePlayer.waitForSurface();
       if (!mounted || generation != _playbackGeneration) return;
+      if (traceIos) IosLivePlayerController.mark('surface ready');
       await _livePlayer.setLiveChannel(url);
+      if (traceIos) IosLivePlayerController.mark('setLiveChannel returned');
       if (!mounted || generation != _playbackGeneration) return;
       _applyAspectRatio();
       setState(() => _hasError = false);

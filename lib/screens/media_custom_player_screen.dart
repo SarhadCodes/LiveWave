@@ -64,6 +64,8 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen>
   bool _isLoading = true;
   bool _searchCancelled = false;
   bool _leavingSearch = false;
+  bool _playbackOpened = false;
+  final Stopwatch _vodClock = Stopwatch();
   String _statusMessage = 'INITIALIZING...';
   bool _showControls = true;
   Timer? _hideTimer;
@@ -227,6 +229,10 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen>
 
   bool get _searchStopped => _searchCancelled || !mounted;
 
+  void _markVod(String step) {
+    debugPrint('[WAVE_VOD] ${_vodClock.elapsedMilliseconds}ms $step');
+  }
+
   void _cancelSearchAndLeave() {
     if (_leavingSearch) return;
     _leavingSearch = true;
@@ -237,9 +243,14 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen>
 
   Future<void> _startPlaybackSequence() async {
     if (_searchStopped) return;
+    _vodClock
+      ..reset()
+      ..start();
+    _markVod('tap ${widget.isMovie ? 'movie' : 'series'} ${widget.title}');
     if (widget.customUrl != null && widget.customUrl!.isNotEmpty) {
       _videoUrl = widget.customUrl;
       _subtitleUrl = widget.customSubtitleUrl;
+      _markVod('custom url');
       _onMediaFound();
       return;
     }
@@ -277,40 +288,92 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen>
     
     // Most common case is exact match or dots. Order variations intelligently.
     final uniqueVariations = variations.expand((v) => [v, v.toLowerCase(), v.toUpperCase()]).toSet().toList();
+    final priorityTitles = <String>[
+      rawTitle.trim(),
+      cleanAlpha,
+      cleanAlpha.replaceAll(' ', '.'),
+      cleanAlpha.replaceAll(' ', ''),
+      rawTitle.trim().toLowerCase(),
+      cleanAlpha.toLowerCase(),
+      cleanAlpha.replaceAll(' ', '.').toLowerCase(),
+    ].where((title) => title.trim().isNotEmpty).toSet().toList();
 
-    // 1. Build all possible URLs ordered by priority
-    List<String> videoUrlsToTry = [];
-    for (var host in baseServers) {
-      for (var titleVar in uniqueVariations) {
+    final priorityUrls = _videoCandidates(baseServers, priorityTitles, primaryOnly: true);
+    final allUrls = _videoCandidates(baseServers, uniqueVariations, primaryOnly: false);
+    final prioritySet = priorityUrls.toSet();
+    final tailUrls = allUrls.where((url) => !prioritySet.contains(url)).toList();
+
+    // The file probe and the saved override do not depend on each other.
+    final overrideFuture = _firestoreService
+        .getMediaOverride(widget.tmdbId!, isMovie: widget.isMovie)
+        .timeout(const Duration(seconds: 8), onTimeout: () => null);
+
+    _markVod('priority probe start urls=${priorityUrls.length}');
+    final foundVideoUrl = await _probeVideoUrls(priorityUrls);
+    _markVod('priority probe done hit=${foundVideoUrl != null}');
+    if (_searchStopped) return;
+    if (foundVideoUrl != null) {
+      await _openProbedVideo(foundVideoUrl, uniqueVariations);
+      return;
+    }
+
+    if (mounted) setState(() => _statusMessage = 'CHECKING OVERRIDES...');
+    _markVod('override wait');
+    final override = await overrideFuture;
+    _markVod('override done');
+    if (_searchStopped) return;
+    if (_applyOverride(override)) return;
+
+    _markVod('tail probe start urls=${tailUrls.length}');
+    if (mounted) setState(() => _statusMessage = 'PROBING FAST SERVERS...');
+    final tailVideoUrl = await _probeVideoUrls(tailUrls);
+    _markVod('tail probe done hit=${tailVideoUrl != null}');
+    if (_searchStopped) return;
+    if (tailVideoUrl != null) {
+      await _openProbedVideo(tailVideoUrl, uniqueVariations);
+      return;
+    }
+
+    _markVod('webview fallback');
+    _startSmartServerSearch();
+  }
+
+  List<String> _videoCandidates(List<String> hosts, List<String> titles, {required bool primaryOnly}) {
+    final urls = <String>[];
+    final year = widget.releaseYear ?? 2025;
+    final years = primaryOnly ? [year] : [year, year - 1, year + 1];
+    final season = widget.season.toString().padLeft(2, '0');
+    final episode = widget.episode.toString().padLeft(2, '0');
+    for (final host in hosts) {
+      for (final titleVar in titles) {
+        if (titleVar.trim().isEmpty) continue;
         if (widget.isMovie) {
-          final year = widget.releaseYear ?? 2025;
-          for (var y in [year, year - 1, year + 1]) {
-            videoUrlsToTry.add('http://$host/EnglishMovies1/$y/$titleVar-NoSub.mp4');
-            videoUrlsToTry.add('http://$host/EnglishMovies/$y/$titleVar-NoSub.mp4');
+          for (final y in years) {
+            urls.add('http://$host/EnglishMovies1/$y/$titleVar-NoSub.mp4');
+            urls.add('http://$host/EnglishMovies/$y/$titleVar-NoSub.mp4');
           }
-          // From servers.md: Some movies are in "OTHER" folder
-          videoUrlsToTry.add('http://$host/EnglishMovies1/OTHER/$titleVar-NoSub.mp4');
-          videoUrlsToTry.add('http://$host/EnglishMovies/OTHER/$titleVar-NoSub.mp4');
+          if (!primaryOnly) {
+            urls.add('http://$host/EnglishMovies1/OTHER/$titleVar-NoSub.mp4');
+            urls.add('http://$host/EnglishMovies/OTHER/$titleVar-NoSub.mp4');
+          }
         } else {
-          final s = widget.season.toString().padLeft(2, '0');
-          final e = widget.episode.toString().padLeft(2, '0');
-          videoUrlsToTry.add('http://$host/EnglishTvSeries1/$titleVar-S${s}E$e.mp4');
-          videoUrlsToTry.add('http://$host/EnglishTvSeries/$titleVar-S${s}E$e.mp4');
-          videoUrlsToTry.add('http://$host/EnglishTvSeries1/$titleVar.S${s}E$e.mp4');
-          videoUrlsToTry.add('http://$host/EnglishTvSeries/$titleVar.S${s}E$e.mp4');
+          urls.add('http://$host/EnglishTvSeries1/$titleVar-S${season}E$episode.mp4');
+          urls.add('http://$host/EnglishTvSeries/$titleVar-S${season}E$episode.mp4');
+          urls.add('http://$host/EnglishTvSeries1/$titleVar.S${season}E$episode.mp4');
+          urls.add('http://$host/EnglishTvSeries/$titleVar.S${season}E$episode.mp4');
         }
       }
     }
+    return urls;
+  }
 
-    // 2. Fast Batch Probing (Abort instantly when found)
-    String? foundVideoUrl;
-    const batchSize = 25; // Try 25 URLs at a time to prevent socket exhaustion
-    
-    for (int i = 0; i < videoUrlsToTry.length; i += batchSize) {
-      if (_searchStopped || foundVideoUrl != null) break;
-      
-      final chunk = videoUrlsToTry.sublist(i, (i + batchSize > videoUrlsToTry.length) ? videoUrlsToTry.length : i + batchSize);
-      
+  Future<String?> _probeVideoUrls(List<String> urls) async {
+    const batchSize = 25;
+    for (var i = 0; i < urls.length; i += batchSize) {
+      if (_searchStopped || _playbackOpened) return null;
+      final end = i + batchSize > urls.length ? urls.length : i + batchSize;
+      final chunk = urls.sublist(i, end);
+      final batchStarted = _vodClock.elapsedMilliseconds;
       final chunkResults = await Future.wait(chunk.map((url) async {
         try {
           final res = await http.head(Uri.parse(url)).timeout(const Duration(seconds: 2));
@@ -318,101 +381,106 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen>
         } catch (_) {}
         return null;
       }));
-      
-      if (_searchStopped) return;
-      foundVideoUrl = chunkResults.firstWhere((r) => r != null, orElse: () => null);
+      _markVod('probe batch ${i ~/ batchSize} took ${_vodClock.elapsedMilliseconds - batchStarted}ms');
+      if (_searchStopped || _playbackOpened) return null;
+      for (final url in chunkResults) {
+        if (url != null) return url;
+      }
     }
+    return null;
+  }
 
-    if (_searchStopped) return;
+  Future<void> _openProbedVideo(String foundVideoUrl, List<String> uniqueVariations) async {
+    if (_searchStopped || _playbackOpened) return;
+    _markVod('subtitle probe start');
+    final foundSubtitleUrl = await _probeSubtitleUrls(_subtitleCandidates(foundVideoUrl, uniqueVariations));
+    _markVod('subtitle probe done hit=${foundSubtitleUrl != null}');
+    if (_searchStopped || _playbackOpened) return;
+    _videoUrl = foundVideoUrl;
+    _subtitleUrl = foundSubtitleUrl ?? '';
+    _onMediaFound();
+  }
 
-    // 3. If video is found, find the matching subtitle in the same folder
-    if (foundVideoUrl != null) {
-      String? foundSubtitleUrl;
-      final uri = Uri.parse(foundVideoUrl);
-      
-      // CRITICAL FIX: We need to preserve the host AND the base path (e.g., /Flussonic247)
-      // The video paths always contain "English", so we split there to get the prefix.
-      final String fullBaseUrl = "${uri.scheme}://${uri.host}${uri.path.split('/English')[0]}";
-      
-      final pathSegments = uri.pathSegments;
-      final vName = pathSegments.last.replaceAll('.mp4', '');
-      
-      // Check the exact same folder first
-      final String currentFolderUrl = foundVideoUrl.substring(0, foundVideoUrl.lastIndexOf('/') + 1);
-      
-      List<String> subUrlsToTry = [
-        '${currentFolderUrl}${vName}.srt',
-        '${currentFolderUrl}${vName}.mp4.srt'
-      ];
-      
-      // Fallback subtitle paths
-      if (widget.isMovie) {
-        final titleVar = vName.replaceAll('-NoSub', '');
-        final year = widget.releaseYear ?? 2025;
+  List<String> _subtitleCandidates(String foundVideoUrl, List<String> uniqueVariations) {
+    final uri = Uri.parse(foundVideoUrl);
+    final fullBaseUrl = '${uri.scheme}://${uri.host}${uri.path.split('/English')[0]}';
+    final vName = uri.pathSegments.last.replaceAll('.mp4', '');
+    final currentFolderUrl = foundVideoUrl.substring(0, foundVideoUrl.lastIndexOf('/') + 1);
+    final subUrlsToTry = <String>[
+      '$currentFolderUrl$vName.srt',
+      '$currentFolderUrl$vName.mp4.srt',
+    ];
+    if (widget.isMovie) {
+      final titleVar = vName.replaceAll('-NoSub', '');
+      final year = widget.releaseYear ?? 2025;
+      subUrlsToTry.addAll([
+        '$fullBaseUrl/EnglishMovies-Subtitle/Ku/$year/$titleVar-Ku.srt',
+        '$fullBaseUrl/EnglishMovies-Subtitle/Ku/$year/$titleVar.srt',
+        '$fullBaseUrl/EnglishMovies-Subtitle/Ku/OTHER/$titleVar-Ku.srt',
+        '$fullBaseUrl/EnglishMovies1/$year/$titleVar.srt',
+        '$fullBaseUrl/EnglishMovies1/OTHER/$titleVar.srt',
+      ]);
+    } else {
+      final season = widget.season.toString().padLeft(2, '0');
+      final episode = widget.episode.toString().padLeft(2, '0');
+      for (final titleVar in uniqueVariations) {
         subUrlsToTry.addAll([
-          '$fullBaseUrl/EnglishMovies-Subtitle/Ku/$year/$titleVar-Ku.srt',
-          '$fullBaseUrl/EnglishMovies-Subtitle/Ku/$year/$titleVar.srt',
-          '$fullBaseUrl/EnglishMovies-Subtitle/Ku/OTHER/$titleVar-Ku.srt',
-          '$fullBaseUrl/EnglishMovies1/$year/$titleVar.srt',
-          '$fullBaseUrl/EnglishMovies1/OTHER/$titleVar.srt',
+          '$fullBaseUrl/EnglishTvSeries-Subtitle/Ku/$titleVar-Ku-S${season}E$episode.srt',
+          '$fullBaseUrl/EnglishTvSeries-Subtitle/Ku/$titleVar-S${season}E$episode.srt',
+          '$fullBaseUrl/EnglishTvSeries1/$titleVar-S${season}E$episode.srt',
+          '$fullBaseUrl/EnglishTvSeries1/$titleVar.S${season}E$episode.srt',
+          '$fullBaseUrl/EnglishTvSeries/$titleVar.S${season}E$episode.srt',
+          '$fullBaseUrl/EnglishTvSeries/$titleVar-S${season}E$episode.srt',
         ]);
-      } else {
-        final s = widget.season.toString().padLeft(2, '0');
-        final e = widget.episode.toString().padLeft(2, '0');
-        // Use uniqueVariations (defined earlier) to try all possible series name variations
-        for (var tVar in uniqueVariations) {
-          subUrlsToTry.addAll([
-            '$fullBaseUrl/EnglishTvSeries-Subtitle/Ku/$tVar-Ku-S${s}E$e.srt',
-            '$fullBaseUrl/EnglishTvSeries-Subtitle/Ku/$tVar-S${s}E$e.srt',
-            '$fullBaseUrl/EnglishTvSeries1/$tVar-S${s}E$e.srt',
-            '$fullBaseUrl/EnglishTvSeries1/$tVar.S${s}E$e.srt',
-            '$fullBaseUrl/EnglishTvSeries/$tVar.S${s}E$e.srt',
-            '$fullBaseUrl/EnglishTvSeries/$tVar-S${s}E$e.srt',
-          ]);
-        }
       }
+    }
+    return subUrlsToTry;
+  }
 
-      for (var subUrl in subUrlsToTry) {
-        if (_searchStopped) return;
+  Future<String?> _probeSubtitleUrls(List<String> urls) async {
+    const batchSize = 6;
+    for (var i = 0; i < urls.length; i += batchSize) {
+      if (_searchStopped || _playbackOpened) return null;
+      final end = i + batchSize > urls.length ? urls.length : i + batchSize;
+      final chunk = urls.sublist(i, end);
+      final chunkResults = await Future.wait(chunk.map((subUrl) async {
         try {
-          final res = await http.get(Uri.parse('$subUrl?t=${DateTime.now().millisecondsSinceEpoch}'), headers: {'Range': 'bytes=0-1024'}).timeout(const Duration(seconds: 3));
-          if (res.statusCode == 200 || res.statusCode == 206) {
-            foundSubtitleUrl = subUrl;
-            break;
-          }
+          final res = await http
+              .get(
+                Uri.parse('$subUrl?t=${DateTime.now().millisecondsSinceEpoch}'),
+                headers: const {'Range': 'bytes=0-1024'},
+              )
+              .timeout(const Duration(seconds: 3));
+          if (res.statusCode == 200 || res.statusCode == 206) return subUrl;
         } catch (_) {}
-      }
-
-      _videoUrl = foundVideoUrl;
-      _subtitleUrl = foundSubtitleUrl ?? '';
-      _onMediaFound();
-      return;
-    }
-
-    if (_searchStopped) return;
-    setState(() => _statusMessage = 'CHECKING OVERRIDES...');
-    final override = await _firestoreService.getMediaOverride(widget.tmdbId!, isMovie: widget.isMovie);
-    if (_searchStopped) return;
-    if (override != null) {
-      if (widget.isMovie) {
-        _videoUrl = override['url'];
-        _subtitleUrl = override['srtUrl'];
-      } else {
-        final seasonKey = 's${widget.season}';
-        final episodeKey = 'e${widget.episode}';
-        final seasonData = override[seasonKey];
-        if (seasonData != null && seasonData[episodeKey] != null) {
-          _videoUrl = seasonData[episodeKey]['url'];
-          _subtitleUrl = seasonData[episodeKey]['srtUrl'];
-        }
-      }
-      if (_videoUrl != null) {
-        _onMediaFound();
-        return;
+        return null;
+      }));
+      if (_searchStopped || _playbackOpened) return null;
+      for (final url in chunkResults) {
+        if (url != null) return url;
       }
     }
+    return null;
+  }
 
-    _startSmartServerSearch();
+  bool _applyOverride(Map<String, dynamic>? override) {
+    if (_searchStopped || _playbackOpened || override == null) return false;
+    if (widget.isMovie) {
+      _videoUrl = override['url'];
+      _subtitleUrl = override['srtUrl'];
+    } else {
+      final seasonKey = 's${widget.season}';
+      final episodeKey = 'e${widget.episode}';
+      final seasonData = override[seasonKey];
+      if (seasonData != null && seasonData[episodeKey] != null) {
+        _videoUrl = seasonData[episodeKey]['url'];
+        _subtitleUrl = seasonData[episodeKey]['srtUrl'];
+      }
+    }
+    if (_videoUrl == null) return false;
+    _markVod('override hit');
+    _onMediaFound();
+    return true;
   }
 
   void _startSmartServerSearch() {
@@ -429,6 +497,7 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen>
         ? '$baseUrl/embed/movie/${widget.tmdbId}?autoPlay=true'
         : '$baseUrl/embed/tv/${widget.tmdbId}/${widget.season}/${widget.episode}?autoPlay=true';
 
+    _markVod('webview server ${_currentServerIndex + 1}/${_servers.length}');
     setState(() => _statusMessage = 'SEARCHING SERVER ${_currentServerIndex + 1}/${_servers.length}...');
 
     _extractorController = WebViewController()
@@ -491,7 +560,9 @@ class _MediaCustomPlayerScreenState extends State<MediaCustomPlayerScreen>
   }
 
   void _onMediaFound() {
-    if (_searchStopped) return;
+    if (_searchStopped || _playbackOpened) return;
+    _playbackOpened = true;
+    _markVod('player open');
     setState(() {
       _isLoading = false;
       _statusMessage = 'READY';

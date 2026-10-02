@@ -27,6 +27,19 @@ abstract class LivePlayerHandle {
 /// iOS live playback. The controller instance is owned by the player route
 /// and is not recreated when the phone rotates.
 class IosLivePlayerController implements LivePlayerHandle {
+  static final Stopwatch _clock = Stopwatch();
+
+  static void mark(String step, {bool reset = false}) {
+    if (reset) {
+      _clock
+        ..reset()
+        ..start();
+    } else if (!_clock.isRunning) {
+      _clock.start();
+    }
+    debugPrint('[WAVE_IOS_LIVE] ${_clock.elapsedMilliseconds}ms $step');
+  }
+
   VideoPlayerController? _controller;
   List<String> _candidates = const [];
   int _candidateIndex = 0;
@@ -60,7 +73,8 @@ class IosLivePlayerController implements LivePlayerHandle {
     if (_disposed) return;
     final trimmed = url.trim();
     if (trimmed.isEmpty) return;
-    _candidates = LiveStreamConfig.liveSourceCandidates(trimmed);
+    _candidates = _avPlayerSources(trimmed);
+    mark('url passed candidates=${_candidates.length} hls=${_candidates.first.toLowerCase().contains('.m3u8')}');
     _candidateIndex = 0;
     _headers = headers ?? LiveStreamConfig.headersFor(trimmed);
     _ready = false;
@@ -93,17 +107,21 @@ class IosLivePlayerController implements LivePlayerHandle {
     await previous?.dispose();
     if (_disposed || generation != _openGeneration) return;
 
+    mark('player created');
     final controller = VideoPlayerController.networkUrl(
       Uri.parse(url),
       httpHeaders: _headers ?? LiveStreamConfig.headersFor(url),
     );
     _controller = controller;
+    mark('source assigned');
     controller.addListener(_onTick);
     try {
       await controller.initialize();
       if (_disposed || generation != _openGeneration) return;
+      mark('AVPlayerItem ready');
       await controller.play();
       if (_disposed || generation != _openGeneration) return;
+      mark('playing');
       _ready = true;
       _failed = false;
       onEvent?.call('firstFrameRendered', const {});
@@ -115,10 +133,28 @@ class IosLivePlayerController implements LivePlayerHandle {
         await _openCurrent();
         return;
       }
+      mark('failed ${e.runtimeType}');
       _failed = true;
       _ready = false;
       onEvent?.call('exception', {'error': e.toString()});
     }
+  }
+
+  /// AVPlayer plays HLS. A raw MPEG-TS URL is not opened on iOS.
+  List<String> _avPlayerSources(String url) {
+    final uri = Uri.tryParse(url);
+    final path = (uri?.path ?? url).toLowerCase();
+    if (path.endsWith('.m3u8')) return [url];
+    if (path.endsWith('.ts') && uri != null) {
+      final hlsPath = uri.path.replaceFirst(RegExp(r'\.ts$', caseSensitive: false), '.m3u8');
+      return [uri.replace(path: hlsPath).toString()];
+    }
+    if (path.endsWith('.ts')) return [LiveStreamConfig.normalizeToHls(url)];
+    final hls = LiveStreamConfig.liveSourceCandidates(url)
+        .where((item) => item.toLowerCase().contains('.m3u8'))
+        .toList();
+    if (hls.isNotEmpty) return hls;
+    return [url];
   }
 
   void _onTick() {

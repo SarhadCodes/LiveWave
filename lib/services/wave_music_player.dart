@@ -72,7 +72,16 @@ class WaveMusicPlayer {
         'shuffle': shuffle,
         'repeat': repeat.name,
       });
+      if (isIos) {
+        debugPrint('[WAVE_IOS_MUSIC] setQueue accepted id=${source.id} title=${source.title}');
+      }
     } catch (e) {
+      if (isIos && e is PlatformException && e.code == 'replaced') {
+        return;
+      }
+      if (isIos) {
+        debugPrint('[WAVE_IOS_MUSIC] setQueue rejected id=${source.id} title=${source.title} error=$e');
+      }
       error.value = e.toString();
       onPlaybackError?.call(e.toString());
     }

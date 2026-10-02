@@ -34,37 +34,63 @@ class IosYoutubeMusic {
     }
   }
 
+  static const Map<String, String> _playbackHeaders = {
+    // Match the Android music engine: googlevideo rejects bare GETs and weak UAs.
+    'User-Agent':
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 '
+        '(KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1',
+    'Referer': 'https://music.youtube.com/',
+    'Origin': 'https://music.youtube.com',
+    'Accept': '*/*',
+    'Accept-Language': 'en-US,en;q=0.9',
+  };
+
   static Future<WaveMusicTrack> resolveTrack(WaveMusicTrack track) async {
     final source = track.permalinkUrl.trim().isNotEmpty ? track.permalinkUrl : track.providerId;
     final id = _videoId(source);
-    if (id.isEmpty) return track.copyWith(audioUrl: '');
+    if (id.isEmpty) {
+      debugPrint('[WAVE_IOS_MUSIC] resolve empty id title=${track.title}');
+      return track.copyWith(audioUrl: '');
+    }
     try {
       final manifest = await _yt.videos.streamsClient.getManifest(id);
       final chosen = _chooseAudio(manifest.audioOnly);
       if (chosen == null) {
-        debugPrint('[WAVE_IOS] no mp4 audio id=$id');
+        debugPrint('[WAVE_IOS_MUSIC] no aac/mp4 audio id=$id title=${track.title}');
         return track.copyWith(audioUrl: '');
       }
       final url = chosen.url.toString();
       if (!url.startsWith('http')) return track.copyWith(audioUrl: '');
+      final uri = Uri.parse(url);
+      final mime = chosen.container == StreamContainer.m3u8 ? 'audio/mpegurl' : 'audio/mp4';
       debugPrint(
-        '[WAVE_IOS] audio id=$id container=${chosen.container.name} bitrate=${chosen.bitrate.bitsPerSecond}',
+        '[WAVE_IOS_MUSIC] resolve title=${track.title} id=$id host=${uri.host} path=${uri.path} '
+        'mime=$mime container=${chosen.container.name} codec=${chosen.audioCodec} '
+        'bitrate=${chosen.bitrate.bitsPerSecond}',
       );
       return track.copyWith(
         audioUrl: url,
-        mimeType: chosen.container == StreamContainer.m3u8 ? 'audio/mpegurl' : 'audio/mp4',
-        streamHeaders: const {'User-Agent': 'Mozilla/5.0'},
+        mimeType: mime,
+        streamHeaders: _playbackHeaders,
       );
     } catch (e) {
-      debugPrint('[WAVE_IOS] resolve failed id=$id type=${e.runtimeType}');
+      debugPrint('[WAVE_IOS_MUSIC] resolve failed id=$id title=${track.title} type=${e.runtimeType} error=$e');
       return track.copyWith(audioUrl: '');
     }
   }
 
   static AudioOnlyStreamInfo? _chooseAudio(List<AudioOnlyStreamInfo> streams) {
+    // AVPlayer plays AAC in MP4. Prefer itag-style mp4a.40.2 near 128 kbps.
+    final aac = streams
+        .where(
+          (stream) =>
+              stream.container == StreamContainer.mp4 &&
+              stream.audioCodec.toLowerCase().contains('mp4a'),
+        )
+        .toList();
     final mp4 = streams.where((stream) => stream.container == StreamContainer.mp4).toList();
     final hls = streams.where((stream) => stream.container == StreamContainer.m3u8).toList();
-    final pool = mp4.isNotEmpty ? mp4 : hls;
+    final pool = aac.isNotEmpty ? aac : (mp4.isNotEmpty ? mp4 : hls);
     if (pool.isEmpty) return null;
     pool.sort((a, b) {
       final da = (a.bitrate.bitsPerSecond - 128000).abs();

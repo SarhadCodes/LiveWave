@@ -9,6 +9,7 @@ import '../models/wave_music_album.dart';
 import '../models/wave_music_artist.dart';
 import '../models/wave_music_playlist.dart';
 import '../models/wave_music_track.dart';
+import '../services/ios_youtube_music.dart';
 import '../services/wave_music_playback_resolver.dart';
 import '../services/wave_music_player.dart';
 import '../services/wave_music_service.dart';
@@ -179,22 +180,35 @@ class WaveMusicProvider extends ChangeNotifier {
     if (index < 0) index = 0;
     _playInFlight = true;
     final selected = candidates[index];
+    final ios = !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
     debugPrint('[WAVE_PLAY] id=${selected.id} title=${selected.title} artist=${selected.artist}');
+    if (ios) {
+      debugPrint('[WAVE_IOS_MUSIC] playTrack started title=${selected.title}');
+    }
     try {
       final WaveMusicTrack resolved;
       try {
         debugPrintSynchronously('[WAVE_FUTURE] playTracks BEFORE await id=${selected.id}');
+        if (ios) debugPrint('[WAVE_IOS_MUSIC] resolver invoke title=${selected.title}');
         resolved = await _service.resolveAudio(selected);
         debugPrintSynchronously('[WAVE_FUTURE] playTracks AFTER await id=${selected.id}');
+        if (ios) {
+          debugPrint(
+            '[WAVE_IOS_MUSIC] resolver returned title=${selected.title} '
+            'urlEmpty=${resolved.audioUrl.trim().isEmpty} mime=${resolved.mimeType}',
+          );
+        }
       } catch (e) {
         player.error.value = _friendlyError(e);
         debugPrint('[WAVE_PLAY] resolve failed id=${selected.id}');
+        if (ios) debugPrint('[WAVE_IOS_MUSIC] resolver threw title=${selected.title} error=$e');
         notifyListeners();
         return;
       }
       if (resolved.audioUrl.trim().isEmpty) {
         player.error.value = selected.unavailabilityMessage;
         debugPrint('[WAVE_PLAY] aborted empty stream id=${selected.id} title=${selected.title}');
+        if (ios) debugPrint('[WAVE_IOS_MUSIC] stop before setQueue: empty resolve title=${selected.title}');
         notifyListeners();
         return;
       }
@@ -205,6 +219,15 @@ class WaveMusicProvider extends ChangeNotifier {
       queueIndex = index;
       currentTrack = resolved;
       _streamRetryId = null;
+      // iOS setQueue waits for AVPlayerItem ready. Open the player UI first so a
+      // slow/failing native load does not look like "track never opened".
+      if (ios) {
+        player.playing.value = false;
+        player.buffering.value = true;
+        player.error.value = null;
+        notifyListeners();
+        debugPrint('[WAVE_IOS_MUSIC] player UI opened title=${selected.title}');
+      }
       final handedOff = WaveMusicPlaybackResolver.instance.takeNativeHandoff(resolved.id);
       if (handedOff) {
         // Native already prepared this item inside the resolve reply.
@@ -212,11 +235,44 @@ class WaveMusicProvider extends ChangeNotifier {
         // that reply returns, and the UI thread never comes back.
         _stageRecent(resolved, positionMs: startAt?.inMilliseconds ?? 0);
       } else {
+        if (ios) debugPrint('[WAVE_IOS_MUSIC] setQueue invoke title=${selected.title}');
         await player.setQueue([resolved], startIndex: 0, play: true);
+        if (ios) {
+          debugPrint(
+            '[WAVE_IOS_MUSIC] setQueue returned title=${selected.title} '
+            'error=${player.error.value ?? 'none'}',
+          );
+        }
+        var playing = resolved;
+        // One alternate AAC/MP4 candidate if AVPlayer rejected the first URL.
+        if (ios && player.error.value != null) {
+          final failedKey = IosYoutubeMusic.streamKey(resolved.audioUrl);
+          debugPrint('[WAVE_IOS_MUSIC] trying alternate stream title=${selected.title}');
+          final alternate = await IosYoutubeMusic.resolveTrack(
+            selected,
+            excludeKeys: {failedKey},
+          );
+          if (alternate.audioUrl.startsWith('http') &&
+              IosYoutubeMusic.streamKey(alternate.audioUrl) != failedKey) {
+            player.error.value = null;
+            queue[index] = alternate;
+            currentTrack = alternate;
+            playing = alternate;
+            notifyListeners();
+            debugPrint('[WAVE_IOS_MUSIC] setQueue retry invoke title=${selected.title}');
+            await player.setQueue([alternate], startIndex: 0, play: true);
+            debugPrint(
+              '[WAVE_IOS_MUSIC] setQueue retry returned title=${selected.title} '
+              'error=${player.error.value ?? 'none'}',
+            );
+          } else {
+            debugPrint('[WAVE_IOS_MUSIC] no alternate stream title=${selected.title}');
+          }
+        }
         if (startAt != null && startAt.inMilliseconds > 0) {
           await player.seek(startAt);
         }
-        _stageRecent(resolved, positionMs: startAt?.inMilliseconds ?? 0);
+        _stageRecent(playing, positionMs: startAt?.inMilliseconds ?? 0);
         notifyListeners();
         await _persist();
       }

@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
+import 'dart:async';
 
 import '../models/wave_music_track.dart';
 
@@ -45,41 +46,66 @@ class IosYoutubeMusic {
     'Accept-Language': 'en-US,en;q=0.9',
   };
 
-  static Future<WaveMusicTrack> resolveTrack(WaveMusicTrack track) async {
+  static Future<WaveMusicTrack> resolveTrack(
+    WaveMusicTrack track, {
+    Set<String> excludeKeys = const {},
+  }) async {
     final source = track.permalinkUrl.trim().isNotEmpty ? track.permalinkUrl : track.providerId;
     final id = _videoId(source);
+    debugPrint('[WAVE_IOS_MUSIC] resolve started title=${track.title} id=$id exclude=${excludeKeys.length}');
     if (id.isEmpty) {
       debugPrint('[WAVE_IOS_MUSIC] resolve empty id title=${track.title}');
       return track.copyWith(audioUrl: '');
     }
     try {
-      final manifest = await _yt.videos.streamsClient.getManifest(id);
-      final chosen = _chooseAudio(manifest.audioOnly);
+      final manifest = await _yt.videos.streamsClient
+          .getManifest(id)
+          .timeout(const Duration(seconds: 15));
+      final chosen = _chooseAudio(manifest.audioOnly, excludeKeys: excludeKeys);
       if (chosen == null) {
-        debugPrint('[WAVE_IOS_MUSIC] no aac/mp4 audio id=$id title=${track.title}');
+        debugPrint(
+          '[WAVE_IOS_MUSIC] resolve no candidate title=${track.title} id=$id '
+          'audioOnly=${manifest.audioOnly.length} exclude=${excludeKeys.length}',
+        );
         return track.copyWith(audioUrl: '');
       }
       final url = chosen.url.toString();
-      if (!url.startsWith('http')) return track.copyWith(audioUrl: '');
+      if (!url.startsWith('http')) {
+        debugPrint('[WAVE_IOS_MUSIC] resolve non-http title=${track.title}');
+        return track.copyWith(audioUrl: '');
+      }
       final uri = Uri.parse(url);
       final mime = chosen.container == StreamContainer.m3u8 ? 'audio/mpegurl' : 'audio/mp4';
       debugPrint(
-        '[WAVE_IOS_MUSIC] resolve title=${track.title} id=$id host=${uri.host} path=${uri.path} '
+        '[WAVE_IOS_MUSIC] resolve ok title=${track.title} id=$id host=${uri.host} path=${uri.path} '
         'mime=$mime container=${chosen.container.name} codec=${chosen.audioCodec} '
-        'bitrate=${chosen.bitrate.bitsPerSecond}',
+        'bitrate=${chosen.bitrate.bitsPerSecond} urlExists=true',
       );
       return track.copyWith(
         audioUrl: url,
         mimeType: mime,
         streamHeaders: _playbackHeaders,
       );
+    } on TimeoutException {
+      debugPrint('[WAVE_IOS_MUSIC] resolve timeout title=${track.title} id=$id');
+      return track.copyWith(audioUrl: '');
     } catch (e) {
       debugPrint('[WAVE_IOS_MUSIC] resolve failed id=$id title=${track.title} type=${e.runtimeType} error=$e');
       return track.copyWith(audioUrl: '');
     }
   }
 
-  static AudioOnlyStreamInfo? _chooseAudio(List<AudioOnlyStreamInfo> streams) {
+  /// Host+path only — never include signed query params.
+  static String streamKey(String url) {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return url;
+    return '${uri.host}${uri.path}';
+  }
+
+  static AudioOnlyStreamInfo? _chooseAudio(
+    List<AudioOnlyStreamInfo> streams, {
+    Set<String> excludeKeys = const {},
+  }) {
     // AVPlayer plays AAC in MP4. Prefer itag-style mp4a.40.2 near 128 kbps.
     final aac = streams
         .where(
@@ -91,13 +117,20 @@ class IosYoutubeMusic {
     final mp4 = streams.where((stream) => stream.container == StreamContainer.mp4).toList();
     final hls = streams.where((stream) => stream.container == StreamContainer.m3u8).toList();
     final pool = aac.isNotEmpty ? aac : (mp4.isNotEmpty ? mp4 : hls);
-    if (pool.isEmpty) return null;
-    pool.sort((a, b) {
+    final usable = pool.where((stream) => !excludeKeys.contains(streamKey(stream.url.toString()))).toList();
+    // If the preferred pool was fully excluded, fall back to any remaining audio-only.
+    final candidates = usable.isNotEmpty
+        ? usable
+        : streams.where((stream) => !excludeKeys.contains(streamKey(stream.url.toString()))).where((stream) {
+            return stream.container == StreamContainer.mp4 || stream.container == StreamContainer.m3u8;
+          }).toList();
+    if (candidates.isEmpty) return null;
+    candidates.sort((a, b) {
       final da = (a.bitrate.bitsPerSecond - 128000).abs();
       final db = (b.bitrate.bitsPerSecond - 128000).abs();
       return da.compareTo(db);
     });
-    return pool.first;
+    return candidates.first;
   }
 
   static Future<List<Map<String, dynamic>>> _songs(String query, int limit) async {

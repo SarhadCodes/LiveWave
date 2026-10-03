@@ -175,13 +175,28 @@ class _WaveMusicPlayerScreenState extends State<WaveMusicPlayerScreen> {
                               ),
                               _FocusIcon(icon: Icons.skip_previous_rounded, size: compact ? 28 : 36, compact: compact, onTap: music.previous),
                               ValueListenableBuilder<bool>(
-                                valueListenable: music.player.playing,
-                                builder: (context, playing, _) {
-                                  return _FocusIcon(
-                                    icon: playing ? Icons.pause_circle_filled : Icons.play_circle_filled,
-                                    size: compact ? 48 : 64,
-                                    compact: compact,
-                                    onTap: music.togglePlayPause,
+                                valueListenable: music.player.buffering,
+                                builder: (context, buffering, _) {
+                                  return ValueListenableBuilder<bool>(
+                                    valueListenable: music.player.playing,
+                                    builder: (context, playing, _) {
+                                      if (buffering && !playing) {
+                                        return Padding(
+                                          padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 12),
+                                          child: SizedBox(
+                                            width: compact ? 36 : 48,
+                                            height: compact ? 36 : 48,
+                                            child: const CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white),
+                                          ),
+                                        );
+                                      }
+                                      return _FocusIcon(
+                                        icon: playing ? Icons.pause_circle_filled : Icons.play_circle_filled,
+                                        size: compact ? 48 : 64,
+                                        compact: compact,
+                                        onTap: music.togglePlayPause,
+                                      );
+                                    },
                                   );
                                 },
                               ),

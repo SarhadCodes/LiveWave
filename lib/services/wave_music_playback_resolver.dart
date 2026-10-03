@@ -116,16 +116,17 @@ class WaveMusicPlaybackResolver {
 
   Future<WaveMusicTrack> _fetchYouTube(WaveMusicTrack track, {required bool startPlayback}) async {
     if (!kIsWeb && Platform.isIOS) {
+      debugPrint('[WAVE_IOS_MUSIC] _fetchYouTube started id=${track.id} title=${track.title}');
       final resolved = await IosYoutubeMusic.resolveTrack(track);
       if (resolved.audioUrl.startsWith('http')) {
         final uri = Uri.tryParse(resolved.audioUrl);
         debugPrint(
-          '[WAVE_IOS_MUSIC] resolver ok id=${track.id} title=${track.title} '
+          '[WAVE_IOS_MUSIC] _fetchYouTube ok id=${track.id} title=${track.title} '
           'host=${uri?.host ?? ''} path=${uri?.path ?? ''} mime=${resolved.mimeType}',
         );
         _streams[track.id] = _CachedStream(resolved.audioUrl, resolved.mimeType, resolved.streamHeaders);
       } else {
-        debugPrint('[WAVE_IOS_MUSIC] resolver empty id=${track.id} title=${track.title}');
+        debugPrint('[WAVE_IOS_MUSIC] _fetchYouTube empty id=${track.id} title=${track.title}');
       }
       return resolved;
     }

@@ -75,11 +75,26 @@ class WaveMusicMiniPlayer extends StatelessWidget {
                     ),
                     _MiniBtn(icon: Icons.skip_previous_rounded, onTap: music.previous),
                     ValueListenableBuilder<bool>(
-                      valueListenable: music.player.playing,
-                      builder: (context, playing, _) {
-                        return _MiniBtn(
-                          icon: playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                          onTap: music.togglePlayPause,
+                      valueListenable: music.player.buffering,
+                      builder: (context, buffering, _) {
+                        return ValueListenableBuilder<bool>(
+                          valueListenable: music.player.playing,
+                          builder: (context, playing, _) {
+                            if (buffering && !playing) {
+                              return const Padding(
+                                padding: EdgeInsets.symmetric(horizontal: 12),
+                                child: SizedBox(
+                                  width: 22,
+                                  height: 22,
+                                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                ),
+                              );
+                            }
+                            return _MiniBtn(
+                              icon: playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                              onTap: music.togglePlayPause,
+                            );
+                          },
                         );
                       },
                     ),

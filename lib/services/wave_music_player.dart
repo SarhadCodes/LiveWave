@@ -64,6 +64,12 @@ class WaveMusicPlayer {
       '[WAVE_PLAYER] set source called id=${source.id} title=${source.title} mime=${source.mimeType} '
       'streamHost=$host urlEmpty=${source.audioUrl.trim().isEmpty} count=${tracks.length}',
     );
+    // iOS: UI may already show currentTrack before native ready. Never keep the
+    // previous track's PLAYING flag, and mark buffering until AVPlayer confirms.
+    if (isIos) {
+      playing.value = false;
+      buffering.value = true;
+    }
     try {
       await _channel.invokeMethod('setQueue', {
         'items': tracks.map((t) => t.toNativeMap()).toList(),
@@ -74,6 +80,7 @@ class WaveMusicPlayer {
       });
       if (isIos) {
         debugPrint('[WAVE_IOS_MUSIC] setQueue accepted id=${source.id} title=${source.title}');
+        // readyToPlay returned; keep buffering until native 'playing' / 'paused'.
       }
     } catch (e) {
       if (isIos && e is PlatformException && e.code == 'replaced') {
@@ -81,6 +88,8 @@ class WaveMusicPlayer {
       }
       if (isIos) {
         debugPrint('[WAVE_IOS_MUSIC] setQueue rejected id=${source.id} title=${source.title} error=$e');
+        buffering.value = false;
+        playing.value = false;
       }
       error.value = e.toString();
       onPlaybackError?.call(e.toString());
